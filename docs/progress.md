@@ -26,7 +26,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 | 0 | Sprite, connectors, public URL, Telegram webhook, sleep/wake | ✅ done |
 | 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, read a real card | ✅ (all-hydrogen re-run pending billing) |
 | 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | ✅ works live (2026-11-25, read by the Haiku fallback: hydrogen was 503) |
-| 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | — |
+| 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | ✅ built and tested offline (72dace4); live checkpoint pending |
 | 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | — |
 | 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
 | 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | — |
@@ -108,9 +108,30 @@ How it works:
 - **Every read fell back to Haiku:** hydrogen answered 503 "high demand" (checked with one tiny call), not 429 quota. So the Telugu was Haiku-quality: page 2 line 1 read as "ఖూహం ముఖ్యులు - విమల", so the card's Butham Muthyalu was matched only on "విమల" (weak, asked about). The Chityal Muthyalu lines were correctly shown as "Is this them?", and "Ramana Reddy" found both of his lines as strong matches. Flags showed as intended (B. Narsimha 1116 vs 116).
 - The ledger on the Sprite still holds these Haiku readings (18 lines). Re-sending page1/page2 when hydrogen is up replaces them.
 
+## Step 3: matching and "Is this them?" (as built, 2026-11-25)
+
+- `internal/match/translit.go`: Telugu script is romanised (`Roman`), then any spelling goes to a sound key (`Key`): no long vowels, no aspiration (th→t, bh→b), doubled letters once, -aiah/-ayya alike, final y→i, m before a consonant → n. Butham = Bhootham = భూతం, Reddy = రెడ్డి, Nagaiah = నాగయ్య. `SameName` also ignores an "a" between consonants (Narsimha = నరసింహ) and allows one slip in names of 6+ letters (Muthyalu/Mutyala).
+- `internal/match/match.go` (`Matcher.Find`):
+  - Word order doesn't matter, so given-name-first ముత్యాలు భూతం matches the card's Butham Muthyalu.
+  - Initials (K., K.V., కె) support a match but never make one. A one-word match whose initial fits nobody on the card is dropped.
+  - Sharing only the surname with a line that names someone else is dropped (Butham Narsimha vs ముత్యాలు భూతం).
+  - The card's separate `surname` field counts as a name word, so "Vimala", surname Butham, strongly matches "భూతం ముత్యాలు - విమల".
+  - Words in the line's text can add a match the name field missed. They never count against one.
+  - Strengths: Confirmed (family said Yes) > Strong (2+ name words, or a linked relation word) > Weak (everything else, always asked). Lines the family said No to are hidden, and the reply says how many.
+- `internal/match/kin.go`: 19 Telugu relation words, each with its meaning and whose surname that relative carries (father's side or mother's maiden side). Two-part spellings like "పెద్ద నాన్న" work too. A bare relation line (బాబాయి) is tied to a person only through the family tree:
+  - `/family father = Bandaru Subba Rao` and `/family mother = Butham Lakshmi` (maiden name, surname first). A card host with surname Bandaru then gets an "Is this Bandaru Ramulu? The line says బాబాయి (father's younger brother), and Bandaru is your father's surname." question.
+  - Yes on a bare relation line saves `బాబాయి = Bandaru Ramulu`. From then on every బాబాయి line is his (shown as "as you told me"), and it stops coming up for other Bandarus.
+  - `/family` shows the tree; `/family babai = …` sets or (left empty) forgets a link.
+  - Typing a relation word ("babai", "Vimala atha") finds those lines.
+- `internal/bot`: Weak hits get "✅ Yes, it's them" / "❌ No" inline buttons with data `y:<askID>`. A tap is stored in `answers`, keyed by `match.PersonKey` (sorted sound keys, so the same person in any script or order). Then the buttons are removed and a "Noted: …" message follows.
+- `internal/ledger`: new tables `family`, `asks`, `answers`. Re-reading a page (fallback → hydrogen) deletes the answers about its old lines, because line IDs change.
+- Tests (no model calls): the answer key's 18 rows as written, plus cross-script pairs, initials, relation via family tree, and answers. `TestThinSlice` now taps No/Yes and checks the answers are remembered. `TestRelationAskAndRemember` covers `/family`, the relation question and the learned link.
+- Seen on the current live ledger (Haiku readings): the real card's hosts Butham Muthyalu and Vimala match only "Muthyalu, Chityal" (asked) and "విమల అత్త" (asked, with the relation reason). His own lines were misread by Haiku (మల్లేశం పురం, ఫాతిం మున్నాలు), so **re-reading the pages with hydrogen is what makes the card demo work.**
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
 2. Page reader built (above). Follow-ups done 2026-11-25: read 2 calls Haiku directly (`vision.Reader.Haiku()`); `vision.Cached` keeps every model answer on disk keyed by a hash of route + prompt + image bytes, so the same photo never reaches a model twice (`readpage` caches under `crops/cache/`); tests replay `testdata/replay/*.read1.json` (saved from run 4, Haiku read 1) through the real crop + flag pipeline with no model calls (skipped if the photos are absent). After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
 3. Step 2 done (section above). When hydrogen is not 503 (try one tiny call first), re-send page1 and page2 to the bot in `/pages` mode to replace the Haiku readings, then forward the card again. Log: `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`.
-4. Next: step 3 (better matching + "Is this them?" Yes/No buttons, remember answers). It must handle the card's English-only names against Telugu-script lines (transliteration), given-name-first order, initials, and relation words.
+4. Step 3 built (section above). **Live checkpoint for step 3:** deploy (`scripts/deploy.sh giveback-bandaru ~/.config/giveback/bot1.token`). If hydrogen is up (one tiny call first), re-send page1 + page2 in `/pages` mode. Then send `/family father = Bandaru Subba Rao` and `/family mother = Butham Lakshmi`, forward the jayaprakash card, tap Yes/No, and forward it again to see the answers remembered.
+5. Then step 4: "About ₹X today" (CPI-IW with linking factors, cited), gold by weight only, confirm flagged amounts in chat.
