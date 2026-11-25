@@ -14,8 +14,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/sivaratrisrinivas/giveback/internal/bot"
@@ -23,9 +25,8 @@ import (
 	"github.com/sivaratrisrinivas/giveback/internal/notebook"
 	"github.com/sivaratrisrinivas/giveback/internal/telegram"
 	"github.com/sivaratrisrinivas/giveback/internal/vision"
+	"github.com/sivaratrisrinivas/giveback/internal/wake"
 )
-
-var started = time.Now()
 
 func main() {
 	home, _ := os.UserHomeDir()
@@ -41,7 +42,15 @@ func main() {
 	reader := vision.New()
 	cache := filepath.Join(dataDir, "cache") // the same photo never reaches a model twice
 	firstModel := vision.Cached(reader, cache, "hydrogen-first")
+
+	// Notice each time the Sprite slept: the process is frozen, not stopped.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
+	wakes := wake.New(time.Now())
+	go wakes.Run(ctx)
+
 	b := &bot.Bot{
+		Wakes: wakes,
 		Store: store,
 		TG:    telegram.New(token),
 		Pages: notebook.Models{
@@ -53,7 +62,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, "Giveback is awake (process up %s).\n", time.Since(started).Round(time.Second))
+		fmt.Fprintf(w, "Giveback is awake: %s.\n", wakes.Status(time.Now()))
 	})
 	mux.HandleFunc("POST /telegram", func(w http.ResponseWriter, r *http.Request) {
 		got := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
@@ -66,11 +75,20 @@ func main() {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
+		arrived := time.Now()
+		woke, afterWake := wakes.FirstRequest(arrived)
+		// Seconds from Telegram receiving the message to us handling it: this
+		// includes waking the Sprite. Telegram only gives whole seconds.
+		lag := int64(-1)
 		if m := u.Message; m != nil {
-			// Seconds from Telegram receiving the message to us handling it: this
-			// includes waking the Sprite. Telegram only gives whole seconds.
-			log.Printf("update %d: chat %d, delivery lag %ds, process up %s", u.UpdateID, m.Chat.ID,
-				time.Now().Unix()-m.Date, time.Since(started).Round(time.Second))
+			lag = arrived.Unix() - m.Date
+			log.Printf("update %d: chat %d, delivery lag %ds", u.UpdateID, m.Chat.ID, lag)
+		} else {
+			log.Printf("update %d: button tap", u.UpdateID)
+		}
+		if afterWake {
+			log.Printf("update %d: first request after the Sprite woke (slept %s, running again %s before this arrived)",
+				u.UpdateID, woke.Slept.Round(time.Second), arrived.Sub(woke.At).Round(time.Millisecond))
 		}
 		// Work happens inside the request on purpose: a Sprite stays awake while
 		// it is serving a request. The work gets its own context so it finishes
@@ -85,13 +103,29 @@ func main() {
 			return
 		}
 		log.Printf("update %d: handled in %s", u.UpdateID, time.Since(start).Round(time.Millisecond))
+		if afterWake && lag >= 0 {
+			log.Printf("update %d: woken by this message; from sending it to the reply: about %ds (delivery %ds + handling %s)",
+				u.UpdateID, lag+int64(time.Since(start).Round(time.Second)/time.Second), lag, time.Since(start).Round(time.Millisecond))
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 
 	addr := ":" + envOr("PORT", "8080")
 	log.Printf("giveback listening on %s, ledger in %s", addr, dataDir)
 	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-	log.Fatal(srv.ListenAndServe())
+	go func() {
+		// On a restart (deploy), let a reply in progress finish first. If it
+		// can't, Telegram re-delivers it and the ledger allows one more try.
+		<-ctx.Done()
+		log.Printf("shutting down: finishing requests in progress")
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		srv.Shutdown(sctx)
+	}()
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
+	log.Printf("stopped")
 }
 
 func mustRead(path string) string {

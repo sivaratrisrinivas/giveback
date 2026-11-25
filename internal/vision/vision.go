@@ -83,9 +83,7 @@ func New() *Reader {
 // constrain its output.
 func (r *Reader) ReadJSON(ctx context.Context, prompt string, schema map[string]any, imgs ...Image) (Result, error) {
 	start := time.Now()
-	pctx, cancel := context.WithTimeout(ctx, r.PrimaryTimeout)
-	out, err := r.gemini(pctx, prompt, schema, imgs)
-	cancel()
+	out, err := r.geminiCall(ctx, prompt, schema, imgs)
 	// "High demand" (503) and rate limits (429) on the free tier usually pass in
 	// a moment: try Gemini once more before falling back. A timeout is not retried.
 	var he *geminiHTTPError
@@ -95,16 +93,14 @@ func (r *Reader) ReadJSON(ctx context.Context, prompt string, schema map[string]
 		case <-time.After(wait):
 		case <-ctx.Done():
 		}
-		pctx, cancel = context.WithTimeout(ctx, r.PrimaryTimeout)
-		out, err = r.gemini(pctx, prompt, schema, imgs)
-		cancel()
+		out, err = r.geminiCall(ctx, prompt, schema, imgs)
 	}
 	if err == nil {
 		return Result{JSON: out, Model: PrimaryModel, Elapsed: time.Since(start)}, nil
 	}
 	primaryErr := err
 
-	out, err = r.haiku(ctx, prompt, imgs)
+	out, err = r.haikuCall(ctx, prompt, imgs)
 	if err != nil {
 		return Result{}, fmt.Errorf("both models failed: %s: %v; %s: %w", PrimaryModel, primaryErr, FallbackModel, err)
 	}
@@ -118,14 +114,50 @@ type haikuOnly struct{ r *Reader }
 
 func (h haikuOnly) ReadJSON(ctx context.Context, prompt string, _ map[string]any, imgs ...Image) (Result, error) {
 	start := time.Now()
-	out, err := h.r.haiku(ctx, prompt, imgs)
+	out, err := h.r.haikuCall(ctx, prompt, imgs)
 	if err != nil {
 		return Result{}, fmt.Errorf("%s: %w", FallbackModel, err)
 	}
 	return Result{JSON: out, Model: FallbackModel, Elapsed: time.Since(start)}, nil
 }
 
-func (r *Reader) gemini(ctx context.Context, prompt string, schema map[string]any, imgs []Image) (json.RawMessage, error) {
+// geminiCall makes one Gemini attempt with its own timeout and records it.
+func (r *Reader) geminiCall(ctx context.Context, prompt string, schema map[string]any, imgs []Image) (json.RawMessage, error) {
+	start := time.Now()
+	pctx, cancel := context.WithTimeout(ctx, r.PrimaryTimeout)
+	out, u, err := r.gemini(pctx, prompt, schema, imgs)
+	cancel()
+	c := Call{Model: PrimaryModel, OK: err == nil, Elapsed: time.Since(start), In: u.In, Out: u.Out, Thinking: u.Thinking}
+	if err != nil {
+		c.Err = shortErr(err)
+	}
+	record(ctx, c)
+	return out, err
+}
+
+// haikuCall makes one Claude request and records it.
+func (r *Reader) haikuCall(ctx context.Context, prompt string, imgs []Image) (json.RawMessage, error) {
+	start := time.Now()
+	out, u, err := r.haiku(ctx, prompt, imgs)
+	c := Call{Model: FallbackModel, OK: err == nil, Elapsed: time.Since(start), In: u.In, Out: u.Out, CostUSD: haikuCost(u.In, u.Out)}
+	if err != nil {
+		c.Err = shortErr(err)
+	}
+	record(ctx, c)
+	return out, err
+}
+
+type usage struct{ In, Out, Thinking int }
+
+func shortErr(err error) string {
+	s := err.Error()
+	if len(s) > 160 {
+		s = s[:160]
+	}
+	return s
+}
+
+func (r *Reader) gemini(ctx context.Context, prompt string, schema map[string]any, imgs []Image) (json.RawMessage, usage, error) {
 	parts := []map[string]any{{"text": prompt}}
 	for _, im := range imgs {
 		parts = append(parts, map[string]any{"inline_data": map[string]any{
@@ -143,17 +175,17 @@ func (r *Reader) gemini(ctx context.Context, prompt string, schema map[string]an
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		r.geminiBase+"/models/"+PrimaryModel+":generateContent", bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := r.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, usage{}, err
 	}
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, newGeminiHTTPError(resp.StatusCode, raw)
+		return nil, usage{}, newGeminiHTTPError(resp.StatusCode, raw)
 	}
 	var gr struct {
 		Candidates []struct {
@@ -164,21 +196,28 @@ func (r *Reader) gemini(ctx context.Context, prompt string, schema map[string]an
 			} `json:"content"`
 			FinishReason string `json:"finishReason"`
 		} `json:"candidates"`
+		UsageMetadata struct {
+			Prompt     int `json:"promptTokenCount"`
+			Candidates int `json:"candidatesTokenCount"`
+			Thoughts   int `json:"thoughtsTokenCount"`
+		} `json:"usageMetadata"`
 	}
 	if err := json.Unmarshal(raw, &gr); err != nil {
-		return nil, fmt.Errorf("gemini: decode response: %w", err)
+		return nil, usage{}, fmt.Errorf("gemini: decode response: %w", err)
 	}
+	u := usage{In: gr.UsageMetadata.Prompt, Out: gr.UsageMetadata.Candidates + gr.UsageMetadata.Thoughts, Thinking: gr.UsageMetadata.Thoughts}
 	if len(gr.Candidates) == 0 {
-		return nil, errors.New("gemini: no candidates returned")
+		return nil, u, errors.New("gemini: no candidates returned")
 	}
 	var sb strings.Builder
 	for _, p := range gr.Candidates[0].Content.Parts {
 		sb.WriteString(p.Text)
 	}
-	return asJSON(sb.String())
+	out, err := asJSON(sb.String())
+	return out, u, err
 }
 
-func (r *Reader) haiku(ctx context.Context, prompt string, imgs []Image) (json.RawMessage, error) {
+func (r *Reader) haiku(ctx context.Context, prompt string, imgs []Image) (json.RawMessage, usage, error) {
 	var blocks []anthropic.ContentBlockParamUnion
 	for _, im := range imgs {
 		blocks = append(blocks, anthropic.NewImageBlockBase64(im.MIME, base64.StdEncoding.EncodeToString(im.Data)))
@@ -190,10 +229,11 @@ func (r *Reader) haiku(ctx context.Context, prompt string, imgs []Image) (json.R
 		Messages:  []anthropic.MessageParam{anthropic.NewUserMessage(blocks...)},
 	})
 	if err != nil {
-		return nil, err
+		return nil, usage{}, err
 	}
+	u := usage{In: int(msg.Usage.InputTokens), Out: int(msg.Usage.OutputTokens)}
 	if msg.StopReason == anthropic.StopReasonRefusal {
-		return nil, errors.New("claude declined the request")
+		return nil, u, errors.New("claude declined the request")
 	}
 	var sb strings.Builder
 	for _, b := range msg.Content {
@@ -201,7 +241,8 @@ func (r *Reader) haiku(ctx context.Context, prompt string, imgs []Image) (json.R
 			sb.WriteString(t.Text)
 		}
 	}
-	return asJSON(sb.String())
+	out, err := asJSON(sb.String())
+	return out, u, err
 }
 
 // asJSON accepts the model's text if it is JSON, tolerating a ```json fence.

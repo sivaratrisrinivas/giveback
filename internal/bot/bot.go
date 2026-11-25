@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/image/draw"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/sivaratrisrinivas/giveback/internal/notebook"
 	"github.com/sivaratrisrinivas/giveback/internal/telegram"
 	"github.com/sivaratrisrinivas/giveback/internal/vision"
+	"github.com/sivaratrisrinivas/giveback/internal/wake"
 	"github.com/sivaratrisrinivas/giveback/internal/worth"
 )
 
@@ -44,6 +46,7 @@ type Bot struct {
 	TG    Messenger
 	Pages notebook.Models // read 1 and read 2 of a notebook page
 	Cards vision.Asker    // reads invitation cards
+	Wakes *wake.Watcher   // when the Sprite last slept, for /usage; may be nil
 
 	mu sync.Mutex // one message at a time: simple, and SQLite has one writer
 }
@@ -72,12 +75,42 @@ I never decide what you should give, and when I'm not sure, I ask.`
 
 // Handle answers one Telegram update. Errors are logged and told to the user
 // where it helps; Handle itself only fails on a broken ledger.
+//
+// Each update is handled once: a re-delivery is dropped, unless the first try
+// never finished (the process restarted mid-reply), which gets one more try.
+// Every model call it causes is logged and stored with its tokens and cost.
 func (b *Bot) Handle(ctx context.Context, u telegram.Update) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if first, err := b.Store.FirstDelivery(u.UpdateID); err != nil || !first {
-		return err // a re-delivery of something already handled
+	if ok, err := b.Store.Claim(u.UpdateID); err != nil || !ok {
+		if err == nil {
+			log.Printf("update %d: already handled, dropped", u.UpdateID)
+		}
+		return err
 	}
+	ctx, meter := vision.WithMeter(ctx)
+	err := b.handle(ctx, u)
+	if calls := meter.Calls(); len(calls) > 0 || meter.CacheHits() > 0 {
+		n, in, out, cost := meter.Total()
+		failed := 0
+		for _, c := range calls {
+			if !c.OK {
+				failed++
+			}
+		}
+		log.Printf("update %d: %d model call(s) (%d failed), %d answer(s) from cache, tokens in %d out %d, cost $%.5f",
+			u.UpdateID, n, failed, meter.CacheHits(), in, out, cost)
+		if rerr := b.Store.RecordCalls(u.UpdateID, calls); rerr != nil {
+			log.Printf("update %d: record calls: %v", u.UpdateID, rerr)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return b.Store.Finish(u.UpdateID)
+}
+
+func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 	if q := u.CallbackQuery; q != nil {
 		return b.answer(ctx, q)
 	}
@@ -106,6 +139,8 @@ func (b *Bot) Handle(ctx context.Context, u telegram.Update) error {
 			return err
 		}
 		return b.say(ctx, chat, fmt.Sprintf("Done. The notebook now has %d lines. Forward an invitation card whenever one arrives.", len(n)))
+	case cmd == "/usage":
+		return b.usage(ctx, chat)
 	case cmd == "/family" || strings.HasPrefix(cmd, "/family "):
 		return b.family(ctx, chat, strings.TrimSpace(text[len("/family"):]))
 	}
@@ -162,14 +197,31 @@ func (b *Bot) addPage(ctx context.Context, chat int64, data []byte) error {
 	if reread == 0 {
 		b.say(ctx, chat, "Reading the page… this takes about a minute.")
 	}
-	b.TG.SendChatAction(ctx, chat, "typing")
-
+	stop := b.typing(ctx, chat)
 	p, err := notebook.Read(ctx, b.Pages, img)
+	stop()
 	if err != nil {
 		log.Printf("chat %d: read page: %v", chat, err)
 		return b.say(ctx, chat, "Sorry, I couldn't read that page just now. Please try again in a little while.")
 	}
 	logSkipped(chat, "page read 1", p.FirstRead)
+	if reread == 0 {
+		// Another photo of a page we already have (photos of one page never
+		// match byte for byte): don't add its lines twice.
+		old, same, err := b.Store.SamePage(p)
+		if err != nil {
+			return err
+		}
+		switch {
+		case same && old.Model == vision.FallbackModel && p.FirstRead.Model != vision.FallbackModel:
+			log.Printf("chat %d: new photo of page %d (read by %s); replacing it with this %s reading", chat, old.ID, old.Model, p.FirstRead.Model)
+			b.say(ctx, chat, fmt.Sprintf("This is a page I had (%s, %s), read by my backup reader. Keeping this better reading instead.", old.Function, old.Date))
+			reread = old.ID
+		case same:
+			log.Printf("chat %d: new photo of page %d; not added again", chat, old.ID)
+			return b.say(ctx, chat, fmt.Sprintf("I already have this page: %s, %s (%d lines), so I didn't add it again.", old.Function, old.Date, old.Lines))
+		}
+	}
 	if reread != 0 {
 		if err := b.Store.DeletePage(reread); err != nil {
 			return err
@@ -199,8 +251,9 @@ func (b *Bot) answerCard(ctx context.Context, chat int64, data []byte) error {
 		return b.say(ctx, chat, "That doesn't look like a photo I can read. Please send a JPEG or PNG.")
 	}
 	b.say(ctx, chat, "Reading the card…")
-	b.TG.SendChatAction(ctx, chat, "typing")
+	stop := b.typing(ctx, chat)
 	inv, res, err := card.Read(ctx, b.Cards, img)
+	stop()
 	if err != nil {
 		log.Printf("chat %d: read card: %v", chat, err)
 		return b.say(ctx, chat, "Sorry, I couldn't read that card just now. Please try again in a little while.")
@@ -556,6 +609,64 @@ func (b *Bot) say(ctx context.Context, chat int64, text string) error {
 		log.Printf("chat %d: send: %v", chat, err)
 	}
 	return nil // a failed reply is logged, not retried: Telegram would re-deliver the whole update
+}
+
+// typing shows "typing…" in the chat until stop is called. Telegram clears
+// it after about 5 seconds, so it is sent again every 4 while a model reads.
+func (b *Bot) typing(ctx context.Context, chat int64) (stop func()) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		t := time.NewTicker(4 * time.Second)
+		defer t.Stop()
+		for {
+			b.TG.SendChatAction(ctx, chat, "typing")
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return func() { cancel(); <-done }
+}
+
+// usage reports what the models cost and when the Sprite last slept.
+func (b *Bot) usage(ctx context.Context, chat int64) error {
+	now := time.Now()
+	var sb strings.Builder
+	for _, span := range []struct {
+		name  string
+		since time.Time
+	}{{"Last 24 hours", now.Add(-24 * time.Hour)}, {"Since the start", time.Time{}}} {
+		us, err := b.Store.Usage(span.since)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&sb, "%s:\n", span.name)
+		if len(us) == 0 {
+			sb.WriteString("• no model calls\n")
+		}
+		total := 0.0
+		for _, u := range us {
+			fmt.Fprintf(&sb, "• %s: %d call(s), %d failed, tokens in %d out %d, $%.4f", u.Model, u.Calls, u.Failed, u.In, u.Out, u.CostUSD)
+			if u.AvgSecs > 0 {
+				fmt.Fprintf(&sb, ", %.1f s each", u.AvgSecs)
+			}
+			sb.WriteString("\n")
+			total += u.CostUSD
+		}
+		if len(us) > 0 {
+			fmt.Fprintf(&sb, "Total $%.4f\n", total)
+		}
+		sb.WriteString("\n")
+	}
+	sb.WriteString(vision.PrimaryModel + " runs on Gemini's free tier, so it costs nothing.")
+	if b.Wakes != nil {
+		sb.WriteString("\n\nThis Sprite: " + b.Wakes.Status(now) + ".")
+	}
+	return b.say(ctx, chat, sb.String())
 }
 
 // forModel prepares a photo for a model: as sent if small enough, otherwise

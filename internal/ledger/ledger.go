@@ -16,6 +16,7 @@ import (
 	_ "modernc.org/sqlite" // pure Go, so the binary still builds with CGO_ENABLED=0
 
 	"github.com/sivaratrisrinivas/giveback/internal/notebook"
+	"github.com/sivaratrisrinivas/giveback/internal/vision"
 )
 
 type Store struct {
@@ -58,7 +59,22 @@ CREATE TABLE IF NOT EXISTS chats (
 	mode    TEXT NOT NULL           -- "pages" while the family is adding notebook pages
 );
 CREATE TABLE IF NOT EXISTS updates (
-	update_id INTEGER PRIMARY KEY   -- Telegram updates already handled (it re-delivers on slow replies)
+	update_id INTEGER PRIMARY KEY,  -- Telegram updates seen (it re-delivers on slow or failed replies)
+	done      INTEGER NOT NULL DEFAULT 1, -- 0 while being handled; stays 0 if the process died mid-way
+	attempts  INTEGER NOT NULL DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS calls (
+	id          INTEGER PRIMARY KEY,
+	at          TEXT NOT NULL,       -- UTC, RFC 3339
+	update_id   INTEGER NOT NULL,    -- the Telegram update that caused it, 0 if none
+	model       TEXT NOT NULL,
+	ok          INTEGER NOT NULL,
+	error       TEXT NOT NULL,
+	elapsed_ms  INTEGER NOT NULL,
+	in_tokens   INTEGER NOT NULL,
+	out_tokens  INTEGER NOT NULL,
+	thinking    INTEGER NOT NULL,
+	cost_usd    REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS family (
 	relation TEXT PRIMARY KEY,      -- "father", "mother", or a Telugu relation word (బాబాయి)
@@ -102,27 +118,19 @@ func Open(dir string) (*Store, error) {
 
 // migrate adds columns that ledgers made by older versions lack.
 func migrate(db *sql.DB) error {
-	have := map[string]bool{}
-	rows, err := db.Query(`SELECT name FROM pragma_table_info('lines')`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var n string
-		if err := rows.Scan(&n); err != nil {
-			rows.Close()
+	for _, c := range []struct{ table, name, def string }{
+		{"lines", "second_digits", "TEXT NOT NULL DEFAULT ''"},
+		{"lines", "second_gold", "REAL NOT NULL DEFAULT 0"},
+		{"lines", "checked", "INTEGER NOT NULL DEFAULT 0"},
+		{"updates", "done", "INTEGER NOT NULL DEFAULT 1"}, // updates seen before were handled
+		{"updates", "attempts", "INTEGER NOT NULL DEFAULT 1"},
+	} {
+		var n int
+		if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.name).Scan(&n); err != nil {
 			return err
 		}
-		have[n] = true
-	}
-	rows.Close()
-	for _, c := range []struct{ name, def string }{
-		{"second_digits", "TEXT NOT NULL DEFAULT ''"},
-		{"second_gold", "REAL NOT NULL DEFAULT 0"},
-		{"checked", "INTEGER NOT NULL DEFAULT 0"},
-	} {
-		if !have[c.name] {
-			if _, err := db.Exec(`ALTER TABLE lines ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+		if n == 0 {
+			if _, err := db.Exec(`ALTER TABLE ` + c.table + ` ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
 				return err
 			}
 		}
@@ -253,7 +261,7 @@ type Entry struct {
 	Gold         float64
 	Item         string
 	Flags        []string
-	Crop         string // absolute path of the line's picture, "" if none
+	Crop         string  // absolute path of the line's picture, "" if none
 	SecondDigits string  // the amount check's reading of the cash
 	SecondGold   float64 // and of the gold
 	Checked      bool    // the family confirmed the gift in chat; Flags is then empty
@@ -301,15 +309,79 @@ func (s *Store) SetMode(chatID int64, mode string) error {
 	return err
 }
 
-// FirstDelivery records a Telegram update and reports whether it is new. It
-// survives restarts, unlike an in-memory set.
-func (s *Store) FirstDelivery(updateID int64) (bool, error) {
-	res, err := s.db.Exec(`INSERT OR IGNORE INTO updates (update_id) VALUES (?)`, updateID)
+// maxAttempts is how many times one Telegram update may be started. A second
+// try covers a reply cut off mid-way (the process restarted, or the ledger
+// failed); more would risk a loop on an update that always fails.
+const maxAttempts = 2
+
+// Claim reports whether this Telegram update should be handled now: it is
+// new, or an earlier try never finished. Call Finish once it is handled.
+// Callers handle one update at a time, so an unfinished try seen here is one
+// that died, not one still running. Kept on disk, so it survives restarts.
+func (s *Store) Claim(updateID int64) (bool, error) {
+	res, err := s.db.Exec(`INSERT OR IGNORE INTO updates (update_id, done, attempts) VALUES (?, 0, 1)`, updateID)
+	if err != nil {
+		return false, err
+	}
+	if n, _ := res.RowsAffected(); n == 1 {
+		return true, nil
+	}
+	res, err = s.db.Exec(`UPDATE updates SET attempts = attempts + 1 WHERE update_id = ? AND done = 0 AND attempts < ?`,
+		updateID, maxAttempts)
 	if err != nil {
 		return false, err
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// Finish marks a claimed update as handled, so a re-delivery is dropped.
+func (s *Store) Finish(updateID int64) error {
+	_, err := s.db.Exec(`UPDATE updates SET done = 1 WHERE update_id = ?`, updateID)
+	return err
+}
+
+// RecordCalls stores the model calls made for one update.
+func (s *Store) RecordCalls(updateID int64, calls []vision.Call) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, c := range calls {
+		if _, err := s.db.Exec(`INSERT INTO calls (at, update_id, model, ok, error, elapsed_ms, in_tokens, out_tokens, thinking, cost_usd)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			now, updateID, c.Model, c.OK, c.Err, c.Elapsed.Milliseconds(), c.In, c.Out, c.Thinking, c.CostUSD); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ModelUsage is what one model was asked to do, summed.
+type ModelUsage struct {
+	Model   string
+	Calls   int
+	Failed  int
+	In, Out int
+	CostUSD float64
+	AvgSecs float64 // mean time of the successful calls
+}
+
+// Usage sums the model calls made since the given time, one row per model.
+func (s *Store) Usage(since time.Time) ([]ModelUsage, error) {
+	rows, err := s.db.Query(`SELECT model, count(*), coalesce(sum(ok = 0), 0), coalesce(sum(in_tokens), 0), coalesce(sum(out_tokens), 0),
+		coalesce(sum(cost_usd), 0), coalesce(avg(CASE WHEN ok THEN elapsed_ms END), 0) / 1000.0
+		FROM calls WHERE at >= ? GROUP BY model ORDER BY model`, since.UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ModelUsage
+	for rows.Next() {
+		var u ModelUsage
+		if err := rows.Scan(&u.Model, &u.Calls, &u.Failed, &u.In, &u.Out, &u.CostUSD, &u.AvgSecs); err != nil {
+			return nil, err
+		}
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }
 
 // Family returns what the household told us: "father", "mother", and relation
@@ -425,4 +497,61 @@ func (s *Store) ConfirmGift(lineID int64, digits string, gold float64) error {
 		return fmt.Errorf("line %d not found", lineID)
 	}
 	return nil
+}
+
+// SamePage finds a stored page with the same gifts as p: another photo of a
+// page already read. Two photos of one page differ byte for byte, so the photo
+// hash can't tell. Pages are the same when at least 3 lines, and 60% of p's
+// lines with money or gold, have the same line number and the same amount.
+func (s *Store) SamePage(p notebook.Page) (PageInfo, bool, error) {
+	key := func(number, digits string, gold float64) string {
+		if digits == "" && gold == 0 {
+			return "" // an item (saree, plate) alone says too little
+		}
+		return fmt.Sprintf("%s|%s|%g", strings.TrimSpace(number), digits, gold)
+	}
+	want := map[string]bool{}
+	for _, l := range p.Lines {
+		if k := key(l.Number, l.AmountDigits, l.GoldSovereigns); k != "" {
+			want[k] = true
+		}
+	}
+	if len(want) < 3 {
+		return PageInfo{}, false, nil
+	}
+	rows, err := s.db.Query(`SELECT page_id, number, amount_digits, gold FROM lines`)
+	if err != nil {
+		return PageInfo{}, false, err
+	}
+	same := map[int64]int{}
+	for rows.Next() {
+		var id int64
+		var number, digits string
+		var gold float64
+		if err := rows.Scan(&id, &number, &digits, &gold); err != nil {
+			rows.Close()
+			return PageInfo{}, false, err
+		}
+		if want[key(number, digits, gold)] {
+			same[id]++
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return PageInfo{}, false, err
+	}
+	var best int64
+	for id, n := range same {
+		if n >= 3 && n*10 >= len(want)*6 && (best == 0 || n > same[best]) {
+			best = id
+		}
+	}
+	if best == 0 {
+		return PageInfo{}, false, nil
+	}
+	var hash string
+	if err := s.db.QueryRow(`SELECT photo_hash FROM pages WHERE id = ?`, best).Scan(&hash); err != nil {
+		return PageInfo{}, false, err
+	}
+	return s.PageByHash(hash)
 }

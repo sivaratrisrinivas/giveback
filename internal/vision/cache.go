@@ -33,6 +33,7 @@ func (c cached) ReadJSON(ctx context.Context, prompt string, schema map[string]a
 	if b, err := os.ReadFile(path); err == nil {
 		var a cachedAnswer
 		if json.Unmarshal(b, &a) == nil && json.Valid(a.JSON) {
+			recordCacheHit(ctx)
 			return Result{JSON: a.JSON, Model: a.Model, Elapsed: a.Elapsed, Cached: true}, nil
 		}
 	}
