@@ -99,6 +99,13 @@ func TestCopyForNewHousehold(t *testing.T) {
 	if ok, _ := s.Claim(7); ok {
 		t.Error("old household forgot update 7")
 	}
+	// A second copy for the same household replaces the record of the first.
+	if _, err := s.CopyFor(filepath.Join(t.TempDir(), "again"), "", "Ravi"); err != nil {
+		t.Fatal(err)
+	}
+	if h, _ := s.Household(); len(h.Copies) != 1 {
+		t.Errorf("copies after copying for Ravi twice = %+v", h.Copies)
+	}
 	// The two grow apart: a later page added to one is not in the other.
 	if _, err := n.AddPage("hash2", notebook.Page{Function: "x", Lines: p.Lines[:1]}); err != nil {
 		t.Fatal(err)

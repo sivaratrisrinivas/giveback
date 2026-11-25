@@ -150,6 +150,10 @@ func (s *Store) CopyFor(dir, from, newName string) (Copy, error) {
 	if err := tx.Commit(); err != nil {
 		return Copy{}, err
 	}
+	// Copying again for the same household (it was set up anew) replaces the old record.
+	if _, err := s.db.Exec(`DELETE FROM copies WHERE name = ?`, newName); err != nil {
+		return Copy{}, err
+	}
 	if _, err := s.db.Exec(`INSERT INTO copies (name, at, pages, lines) VALUES (?, ?, ?, ?)`, newName, at, c.Pages, c.Lines); err != nil {
 		return Copy{}, err
 	}
