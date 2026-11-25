@@ -27,7 +27,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 | 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, read a real card | ✅ (all-hydrogen re-run pending billing) |
 | 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | ✅ works live (2026-11-25, read by the Haiku fallback: hydrogen was 503) |
 | 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | ✅ works live (2026-11-26 00:14 IST): `/family`, Yes/No buttons, remembered answers. Relation-word demo waits for a hydrogen re-read of the pages |
-| 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | — |
+| 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | 🟡 built, tested offline, deployed (5a2fe95); live checkpoint pending |
 | 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
 | 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | — |
 | 7 | Buffer (1h). No new features after this point. | — |
@@ -134,10 +134,25 @@ How it works:
 - "Bandaru Ramulu" found nothing, correctly: **the live ledger's Haiku readings (a different run from `testdata/replay`) have no బాబాయి at all.** Line 1.7 was read as "పురుషోత్తం", 1.9 as "ఎల్లి", 1.3 as "బాబు నాన్న", and Muthyalu's own lines 1.1/2.1 as "మెట్లజీ పురాకం" and "ఖూహం ముఖ్యులు - విమల". Hydrogen still answered 503 at 00:10 IST.
 - These test answers are dropped when the pages are re-read (line IDs change), which is fine.
 
+## Step 4: today's value, gold, confirming amounts (as built, 2026-11-26)
+
+- `internal/worth`: official CPI-IW only, copied as published, nothing estimated.
+  - Yearly averages (April–March) 1993-94 … 2025-26: RBI Handbook of Statistics on Indian Economy 2025-26, **Table 34** "Consumer Price Index - Annual Average" (dated Jul 31, 2026), https://www.rbi.org.in/Scripts/PublicationsView.aspx?id=23859. Bases as printed: 1982=100 up to 2004-05 (so 1993-94 = 258, 2003-04 = 500), 2001=100 for 2005-06 … 2019-20, 2016=100 from 2020-21.
+  - Linking factors from that table's notes: 4.63 (2001 → 1982 series) and 2.88 (2016 → 2001). old = new × factor, so a 1982-base figure ÷ (4.63 × 2.88) is on base 2016.
+  - Today: **Aug 2026 = 154.4** (base 2016=100), the latest month on https://labourbureau.gov.in/CPI (its chart; RBI Table 163 agrees up to May 2026 = 150.8). Update `TodayIndex`/`TodayMonth` when a newer month is out.
+  - The page date picks the year: 12-2-1994 → 1993-94 (₹116 → about ₹930, ×8.0); 8-6-2003 → 2003-04 (₹1,116 → about ₹4,600). Only a year written → the April year, and the reply says so. No clear four-digit year, or before 1993-94 → no value, says why. Rounded to 2 significant figures ("about").
+  - Fetching notes: rbidocs.rbi.org.in (the XLSX/PDF) is behind a bot check; the www.rbi.org.in `PublicationsView.aspx?id=…` pages show the same table as HTML. The Labour Bureau's own monthly search covers only 2006 onward.
+- Replies: under "Gave:" a line "That's about ₹X in today's money (prices are N× those of 1993-94)." and a one-line source (Labour Bureau, RBI Table 34, the then-index and base, the linking factors, Aug 2026 154.4).
+- Gold is shown by weight only: "2 sovereigns of gold (16 g)" (1 sovereign = 8 g) and "Gold is shown by weight only, never turned into rupees."
+- Flagged lines get **no** today's value ("I'll work it out once you confirm the amount"), and buttons on their own row: one per reading (read 1, and read 2 when they disagree, e.g. "✅ ₹1,116" / "✅ ₹116"), plus "✏️ Something else", which asks the family to type it ("1116", "Rs 1,116/-", "2 sovereigns", "1 kasu", "0", "cancel"). Confirming stores the gift, clears the flags (`lines.checked = 1`), and replies with today's value. Later replies say "(you checked this)". Callback data `c:<line>:<digits>:<gold>` or `c:<line>:x`; typing mode is chat mode `fix:<line>`.
+- `internal/ledger`: new columns `second_digits`, `second_gold`, `checked`, added to old ledgers on open (tested). Lines read before this have no second reading stored, so they offer only read 1 + "Something else". Re-reading a page drops its confirmations, like answers.
+- `internal/telegram`: `telegram.NewRow` between buttons starts a new row.
+- Tests (no model calls): `internal/worth` (each base, year-only, no-guess cases, cite text), `TestTodayValueInCaption`, `TestConfirmFlaggedAmount` (tap a reading, then "Something else" + typed gold), `TestParseGift`, `TestMigrateOldLedger`.
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
 2. Page reader built (above). Follow-ups done 2026-11-25: read 2 calls Haiku directly (`vision.Reader.Haiku()`); `vision.Cached` keeps every model answer on disk keyed by a hash of route + prompt + image bytes, so the same photo never reaches a model twice (`readpage` caches under `crops/cache/`); tests replay `testdata/replay/*.read1.json` (saved from run 4, Haiku read 1) through the real crop + flag pipeline with no model calls (skipped if the photos are absent). After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
 3. Step 2 done (section above). When hydrogen is not 503 (try one tiny call first), re-send page1 and page2 to the bot in `/pages` mode to replace the Haiku readings, then forward the card again. Log: `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`.
 4. Step 3 works live (section above). **Still to show, once hydrogen is up:** deploy (`scripts/deploy.sh giveback-bandaru ~/.config/giveback/bot1.token`). If hydrogen is up (one tiny call first), re-send page1 + page2 in `/pages` mode. The family tree is already set. Type "Bandaru Ramulu" (expect "Is this Bandaru Ramulu? The line says బాబాయి …" with buttons), forward the jayaprakash card, tap Yes/No, and forward it again to see the answers remembered.
-5. Then step 4: "About ₹X today" (CPI-IW with linking factors, cited), gold by weight only, confirm flagged amounts in chat.
+5. Step 4 built and deployed (section above). Hydrogen was still 503 at 00:17 IST on Nov 26. Live checkpoint for step 4: type "Ramana Reddy" (values + source), "Butham Narsimha" (flagged 1116/116 → tap a reading), a gold line (బాబాయి/peddananna) → weight only.
