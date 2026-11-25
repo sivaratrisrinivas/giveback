@@ -202,7 +202,7 @@ func TestThinSlice(t *testing.T) {
 		t.Fatalf("typed lookup sent %d pictures, want 2", len(tg.photos))
 	}
 	for i, c := range tg.photos {
-		if !strings.HasPrefix(c, "Is this Muthyalu?") || len(tg.buttons[i]) != 2 {
+		if !strings.HasPrefix(c, "Is this Muthyalu?") || len(tg.buttons[i]) < 2 || tg.buttons[i][0].Data[0] != 'y' || tg.buttons[i][1].Data[0] != 'n' {
 			t.Errorf("one shared word must be asked about: %q %v", c, tg.buttons[i])
 		}
 	}
@@ -224,7 +224,7 @@ func TestThinSlice(t *testing.T) {
 	}
 	tg.photos, tg.buttons = nil, nil
 	send(msg(10, telegram.Message{Text: "Muthyalu"}))
-	if len(tg.photos) != 1 || !strings.Contains(tg.photos[0], "you confirmed this is Muthyalu") || tg.buttons[0] != nil {
+	if len(tg.photos) != 1 || !strings.Contains(tg.photos[0], "you confirmed this is Muthyalu") || (len(tg.buttons[0]) > 0 && tg.buttons[0][0].Data[0] != 'c') {
 		t.Errorf("after answers: %q %v", tg.photos, tg.buttons)
 	}
 	if !strings.Contains(tg.texts[len(tg.texts)-1], "1 line(s) you told me aren't them") {
@@ -307,7 +307,7 @@ func TestRelationAskAndRemember(t *testing.T) {
 	tg.texts = nil
 	send(msg(7, telegram.Message{Text: "Bandaru Ramulu"}))
 	got := strings.Join(tg.texts, "\n---\n")
-	for _, want := range []string{"Found in the notebook (you confirmed this is Bandaru Ramulu)", "Found in the notebook (బాబాయి is Bandaru Ramulu, as you told me)", "Gave: 2 sovereigns of gold + గొలుసు", "1 line(s) you told me aren't them"} {
+	for _, want := range []string{"Found in the notebook (you confirmed this is Bandaru Ramulu)", "Found in the notebook (బాబాయి is Bandaru Ramulu, as you told me)", "Gave: 2 sovereigns of gold (16 g) + గొలుసు", "1 line(s) you told me aren't them"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("after answers, missing %q in:\n%s", want, got)
 		}
@@ -350,8 +350,8 @@ func TestGift(t *testing.T) {
 	}{
 		{ledger.Entry{AmountDigits: "1116"}, "₹1,116"},
 		{ledger.Entry{AmountDigits: "100000"}, "₹1,00,000"},
-		{ledger.Entry{Gold: 1, Item: "ఉంగరం"}, "1 sovereign of gold + ఉంగరం"},
-		{ledger.Entry{Gold: 2}, "2 sovereigns of gold"},
+		{ledger.Entry{Gold: 1, Item: "ఉంగరం"}, "1 sovereign of gold (8 g) + ఉంగరం"},
+		{ledger.Entry{Gold: 2}, "2 sovereigns of gold (16 g)"},
 		{ledger.Entry{}, "not written"},
 	} {
 		if got := Gift(c.e); got != c.want {
@@ -394,5 +394,147 @@ func TestFallbackPageIsReread(t *testing.T) {
 	es, _ := store.Entries()
 	if len(es) != 8 {
 		t.Errorf("%d lines in the ledger, want 8 (old reading replaced)", len(es))
+	}
+}
+
+// A strong match shows today's value with its source; gold never gets a rupee value.
+func TestTodayValueInCaption(t *testing.T) {
+	c := Caption(match.Hit{Strength: match.Strong, Entry: ledger.Entry{Function: "పద్మ పెళ్ళి", Date: "12-2-1994",
+		Text: "K. Ramana Reddy, Miryalaguda - 116/-", AmountDigits: "116"}}, "")
+	for _, want := range []string{"Gave: ₹116", "That's about ₹930 in today's money (prices are 8.0× those of 1993-94).",
+		"Source: CPI-IW, Labour Bureau", "1993-94 average 258 (base 1982=100), linked ×4.63 ×2.88; Aug 2026: 154.4 (base 2016=100)"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("caption %q lacks %q", c, want)
+		}
+	}
+	gold := Caption(match.Hit{Strength: match.Strong, Entry: ledger.Entry{Date: "8-6-2003", Text: "బాబాయి - 2 కాసులు గొలుసు", Gold: 2, Item: "గొలుసు"}}, "")
+	if strings.Contains(gold, "₹") || !strings.Contains(gold, "2 sovereigns of gold (16 g)") || !strings.Contains(gold, "by weight only") {
+		t.Errorf("gold caption %q", gold)
+	}
+	noYear := TodayValue(ledger.Entry{AmountDigits: "116", Date: "12-2-94"})
+	if strings.Contains(noYear, "₹") || !strings.Contains(noYear, "can't say") {
+		t.Errorf("no clear year: %q", noYear)
+	}
+}
+
+// A flagged amount gets no today's value until the family confirms it, by a
+// tap on one of the two readings or by typing what the handwriting says.
+func TestConfirmFlaggedAmount(t *testing.T) {
+	store, err := ledger.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	crop := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	_, err = store.AddPage("h1", notebook.Page{Function: "పద్మ పెళ్ళి", Date: "12-2-1994", Lines: []notebook.Line{
+		{Number: "5", Text: "B. Narsimha, Nalgonda - 1116/-", Name: "B. Narsimha", Place: "Nalgonda", AmountDigits: "1116",
+			SecondDigits: "116", Crop: crop, Flags: []string{"amount read as ₹1,116, then as ₹116"}},
+		{Number: "3", Text: "పెద్దనాన్న - 1 కాసు ఉంగరం", Name: "పెద్దనాన్న", GoldSovereigns: 1, SecondGold: 2, Item: "ఉంగరం",
+			Crop: crop, Flags: []string{"gold read as 1, then as 2 sovereigns"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := &fakeTG{}
+	b := &Bot{Store: store, TG: tg}
+	ctx := context.Background()
+	send := func(u telegram.Update) {
+		t.Helper()
+		if err := b.Handle(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tap := func(id int64, data string) {
+		t.Helper()
+		send(telegram.Update{UpdateID: id, CallbackQuery: &telegram.CallbackQuery{ID: "q", Data: data,
+			Message: &telegram.Message{MessageID: 50, Chat: tg.chat()}}})
+	}
+	last := func() string { return tg.texts[len(tg.texts)-1] }
+
+	send(msg(1, telegram.Message{Text: "Butham Narsimha"}))
+	if len(tg.photos) != 1 {
+		t.Fatalf("photos %q", tg.photos)
+	}
+	if c := tg.photos[0]; strings.Contains(c, "today's money") || !strings.Contains(c, "once you confirm the amount") {
+		t.Errorf("flagged amount must not get a value: %q", c)
+	}
+	var labels []string
+	var amount []telegram.Button
+	for _, bt := range tg.buttons[0] {
+		if strings.HasPrefix(bt.Data, "c:") {
+			labels = append(labels, bt.Text)
+			amount = append(amount, bt)
+		}
+	}
+	if got := strings.Join(labels, " | "); got != "✅ ₹1,116 | ✅ ₹116 | ✏️ Something else" {
+		t.Fatalf("amount buttons %q", got)
+	}
+	tap(2, amount[0].Data)
+	if !strings.Contains(last(), "gave ₹1,116. I'll remember.") || !strings.Contains(last(), "about ₹8,900 in today's money") {
+		t.Errorf("confirm reply %q", last())
+	}
+	tg.photos, tg.buttons = nil, nil
+	send(msg(3, telegram.Message{Text: "Butham Narsimha"}))
+	if c := tg.photos[0]; !strings.Contains(c, "Gave: ₹1,116 (you checked this)") || strings.Contains(c, "⚠️") || strings.Contains(fmt.Sprint(tg.buttons[0]), "c:") {
+		t.Errorf("after confirming: %q %v", c, tg.buttons[0])
+	}
+
+	// Gold: "Something else", then type it.
+	tg.photos, tg.buttons = nil, nil
+	send(msg(4, telegram.Message{Text: "peddananna"}))
+	if len(tg.photos) != 1 {
+		t.Fatalf("relation lookup: %q", tg.photos)
+	}
+	bs := tg.buttons[0]
+	if bs[len(bs)-1].Text != "✏️ Something else" || bs[len(bs)-3].Text != "✅ 1 sovereign" || bs[len(bs)-2].Text != "✅ 2 sovereigns" {
+		t.Fatalf("gold buttons %v", bs)
+	}
+	tap(5, bs[len(bs)-1].Data)
+	if !strings.Contains(last(), "type what it says") {
+		t.Errorf("fix prompt %q", last())
+	}
+	send(msg(6, telegram.Message{Text: "one"}))
+	if !strings.Contains(last(), "didn't understand") {
+		t.Errorf("bad input reply %q", last())
+	}
+	send(msg(7, telegram.Message{Text: "1 kasu"}))
+	if r := last(); !strings.Contains(r, "gave 1 sovereign of gold (8 g) + ఉంగరం") || strings.Contains(r, "₹") || !strings.Contains(r, "by weight only") {
+		t.Errorf("typed gold reply %q", r)
+	}
+	es, _ := store.Entries()
+	for _, e := range es {
+		if !e.Checked || len(e.Flags) != 0 {
+			t.Errorf("line %s not confirmed: %+v", e.Number, e)
+		}
+	}
+	// Back to normal: a typed name is a lookup again.
+	tg.photos = nil
+	send(msg(8, telegram.Message{Text: "Butham Narsimha"}))
+	if len(tg.photos) != 1 {
+		t.Errorf("lookup after fix: %q", tg.photos)
+	}
+}
+
+func TestParseGift(t *testing.T) {
+	e := ledger.Entry{AmountDigits: "516", Gold: 1}
+	for _, c := range []struct {
+		in     string
+		digits string
+		gold   float64
+		ok     bool
+	}{
+		{"1116", "1116", 1, true},
+		{"rs 1,116/-", "1116", 1, true},
+		{"₹516", "516", 1, true},
+		{"0", "", 1, true},
+		{"2 sovereigns", "516", 2, true},
+		{"1.5 కాసులు", "516", 1.5, true},
+		{"one", "", 0, false},
+		{"", "", 0, false},
+	} {
+		d, g, ok := parseGift(c.in, e)
+		if d != c.digits || g != c.gold || ok != c.ok {
+			t.Errorf("parseGift(%q) = %q, %g, %v", c.in, d, g, ok)
+		}
 	}
 }

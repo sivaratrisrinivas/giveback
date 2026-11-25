@@ -25,6 +25,7 @@ import (
 	"github.com/sivaratrisrinivas/giveback/internal/notebook"
 	"github.com/sivaratrisrinivas/giveback/internal/telegram"
 	"github.com/sivaratrisrinivas/giveback/internal/vision"
+	"github.com/sivaratrisrinivas/giveback/internal/worth"
 )
 
 // Messenger is what the bot needs from Telegram; tests use a fake.
@@ -47,7 +48,10 @@ type Bot struct {
 	mu sync.Mutex // one message at a time: simple, and SQLite has one writer
 }
 
-const modePages = "pages"
+const (
+	modePages = "pages"
+	modeFix   = "fix:" // + line ID: the next typed message is that line's gift
+)
 
 // maxSide is the longest photo side sent to a model. Bigger photos are slow to
 // read and can pass the connector's 8 MB limit; this is plenty for handwriting.
@@ -58,6 +62,8 @@ const help = `Namaskaram! I keep your family's gift notebook.
 • To add notebook pages: send /pages, then send each page as a photo (sending it as a File keeps it sharpest). Send /done when finished.
 • When an invitation card arrives: forward the card's photo here. I'll show what that family gave, with the handwritten line.
 • Or type a name to look it up (a relation word like babai works too).
+• Cash comes with what it's worth today (official CPI-IW price index, source shown). Gold stays by weight, in sovereigns.
+• If I'm unsure of an amount, I show the handwriting and ask you to confirm it.
 • Tell me about the family once, so I can work out relation words like బాబాయి:
   /family father = Bandaru Subba Rao
   /family mother = Butham Lakshmi   (her maiden name, surname first)
@@ -122,6 +128,13 @@ func (b *Bot) Handle(ctx context.Context, u telegram.Update) error {
 	}
 
 	if text != "" && !strings.HasPrefix(text, "/") {
+		mode, err := b.Store.Mode(chat)
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(mode, modeFix) {
+			return b.typedGift(ctx, chat, mode, text)
+		}
 		return b.lookup(ctx, chat, []match.Person{{Names: []string{text}}}, nil)
 	}
 	return b.say(ctx, chat, help)
@@ -303,6 +316,12 @@ func (b *Bot) lookup(ctx context.Context, chat int64, persons []match.Person, na
 				{Text: "❌ No", Data: fmt.Sprintf("n:%d", askID)},
 			}
 		}
+		if amount := GiftButtons(s.hit.Entry); amount != nil {
+			if buttons != nil {
+				buttons = append(buttons, telegram.NewRow)
+			}
+			buttons = append(buttons, amount...)
+		}
 		if s.hit.Entry.Crop == "" {
 			b.TG.SendText(ctx, chat, caption+"\n(No picture of this line was kept.)", buttons)
 			continue
@@ -325,6 +344,9 @@ func (b *Bot) answer(ctx context.Context, q *telegram.CallbackQuery) error {
 		chat, msgID = q.Message.Chat.ID, q.Message.MessageID
 	}
 	kind, idText, _ := strings.Cut(q.Data, ":")
+	if kind == "c" {
+		return b.confirmTap(ctx, q, chat, msgID, idText)
+	}
 	askID, err := strconv.ParseInt(idText, 10, 64)
 	if err != nil || (kind != "y" && kind != "n") {
 		return b.TG.AnswerCallback(ctx, q.ID, "")
@@ -472,8 +494,14 @@ func Caption(h match.Hit, who string) string {
 		fmt.Fprintf(&sb, ", line %s", e.Number)
 	}
 	fmt.Fprintf(&sb, "\n“%s”\nGave: %s", e.Text, Gift(e))
+	if e.Checked {
+		sb.WriteString(" (you checked this)")
+	}
 	if len(e.Flags) > 0 {
 		fmt.Fprintf(&sb, "\n⚠️ Please check the handwriting: %s", strings.Join(e.Flags, "; "))
+	}
+	if t := TodayValue(e); t != "" {
+		sb.WriteString("\n" + t)
 	}
 	return sb.String()
 }
@@ -497,7 +525,7 @@ func Gift(e ledger.Entry) string {
 		if e.Gold == 1 {
 			unit = "sovereign"
 		}
-		parts = append(parts, fmt.Sprintf("%g %s of gold", e.Gold, unit))
+		parts = append(parts, fmt.Sprintf("%g %s of gold (%g g)", e.Gold, unit, e.Gold*gramsPerSovereign))
 	}
 	if e.Item != "" {
 		parts = append(parts, e.Item)
@@ -579,4 +607,184 @@ func onDate(d string) string {
 		return ""
 	}
 	return " on " + d
+}
+
+// gramsPerSovereign: one sovereign (కాసు) of gold is 8 grams.
+const gramsPerSovereign = 8
+
+// TodayValue says what the cash on a line is worth today, with its source.
+// Gold is never turned into rupees, and a flagged amount gets no value until
+// the family confirms it: a misread 116 for 1,116 must not be multiplied.
+func TodayValue(e ledger.Entry) string {
+	var lines []string
+	if e.AmountDigits != "" {
+		n, err := strconv.Atoi(e.AmountDigits)
+		switch {
+		case len(e.Flags) > 0:
+			lines = append(lines, "Today's value: I'll work it out once you confirm the amount (buttons below).")
+		case err != nil || n == 0:
+		default:
+			if v, ok := worth.Today(n, e.Date); ok {
+				lines = append(lines, valueLine(v))
+			} else {
+				lines = append(lines, fmt.Sprintf("I can't say what that's worth today: the page needs a clear year between %d and %d, the years my official price table covers.", worth.FirstYear, worth.LastYear+1))
+			}
+		}
+	}
+	if e.Gold > 0 {
+		lines = append(lines, "Gold is shown by weight only, never turned into rupees.")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func valueLine(v worth.Value) string {
+	s := fmt.Sprintf("That's about ₹%s in today's money (prices are %.1f× those of %s).",
+		groupIndian(strconv.Itoa(v.Today)), v.Factor, v.Year)
+	if v.Guessed {
+		s += fmt.Sprintf(" Only the year is written, so I used April–March %s.", v.Year)
+	}
+	return s + "\n" + v.Cite()
+}
+
+// GiftButtons offers the readings of a flagged gift to confirm with one tap,
+// plus "something else" to type it. nil when the line needs no check.
+func GiftButtons(e ledger.Entry) []telegram.Button {
+	if len(e.Flags) == 0 || e.Checked {
+		return nil
+	}
+	type reading struct {
+		digits string
+		gold   float64
+	}
+	choices := []reading{{e.AmountDigits, e.Gold}}
+	disagree := false
+	for _, f := range e.Flags {
+		disagree = disagree || strings.Contains(f, ", then as ")
+	}
+	// An empty second reading is offered as no choice: ledgers from before
+	// read 2 was stored have none, and "Something else" covers the rest.
+	if second := (reading{e.SecondDigits, e.SecondGold}); disagree && second != choices[0] && second != (reading{}) {
+		choices = append(choices, second)
+	}
+	var out []telegram.Button
+	for _, c := range choices {
+		label := Gift(ledger.Entry{AmountDigits: c.digits, Gold: c.gold})
+		if label == "not written" {
+			label = "no cash or gold"
+		}
+		label = strings.ReplaceAll(label, " of gold", "")
+		if i := strings.Index(label, " ("); i >= 0 && strings.HasSuffix(label, " g)") {
+			label = label[:i] // grams don't fit on a button
+		}
+		out = append(out, telegram.Button{Text: "✅ " + label, Data: fmt.Sprintf("c:%d:%s:%g", e.ID, c.digits, c.gold)})
+	}
+	return append(out, telegram.Button{Text: "✏️ Something else", Data: fmt.Sprintf("c:%d:x", e.ID)})
+}
+
+// confirmTap handles a tap on one of GiftButtons: "c:<line>:<digits>:<gold>"
+// or "c:<line>:x" to type the gift instead.
+func (b *Bot) confirmTap(ctx context.Context, q *telegram.CallbackQuery, chat, msgID int64, rest string) error {
+	parts := strings.Split(rest, ":")
+	lineID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || len(parts) < 2 {
+		return b.TG.AnswerCallback(ctx, q.ID, "")
+	}
+	e, ok, err := b.Store.Entry(lineID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return b.TG.AnswerCallback(ctx, q.ID, "That line is out of date (the page was read again).")
+	}
+	if parts[1] == "x" {
+		if err := b.Store.SetMode(chat, modeFix+parts[0]); err != nil {
+			return err
+		}
+		b.TG.AnswerCallback(ctx, q.ID, "")
+		return b.say(ctx, chat, fmt.Sprintf("Please look at the handwriting of “%s” and type what it says: the rupees in digits (like 1116), or gold like “2 sovereigns”. Type 0 if no cash is written, or “cancel”.", e.Text))
+	}
+	if len(parts) != 3 {
+		return b.TG.AnswerCallback(ctx, q.ID, "")
+	}
+	gold, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil || !allDigits(parts[1]) {
+		return b.TG.AnswerCallback(ctx, q.ID, "")
+	}
+	b.TG.AnswerCallback(ctx, q.ID, "Noted")
+	if msgID != 0 {
+		b.TG.ClearButtons(ctx, chat, msgID)
+	}
+	return b.confirm(ctx, chat, e, parts[1], gold)
+}
+
+// typedGift reads the gift the family typed after "Something else".
+func (b *Bot) typedGift(ctx context.Context, chat int64, mode, text string) error {
+	lineID, _ := strconv.ParseInt(strings.TrimPrefix(mode, modeFix), 10, 64)
+	low := strings.ToLower(strings.TrimSpace(text))
+	if low == "cancel" {
+		if err := b.Store.SetMode(chat, ""); err != nil {
+			return err
+		}
+		return b.say(ctx, chat, "OK, left as it was.")
+	}
+	e, ok, err := b.Store.Entry(lineID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		b.Store.SetMode(chat, "")
+		return b.say(ctx, chat, "That line is out of date (the page was read again). Look the name up again to see it.")
+	}
+	digits, gold, ok := parseGift(low, e)
+	if !ok {
+		return b.say(ctx, chat, "I didn't understand that. Type the rupees in digits (like 1116), or gold like “2 sovereigns”, or “cancel”.")
+	}
+	if err := b.Store.SetMode(chat, ""); err != nil {
+		return err
+	}
+	return b.confirm(ctx, chat, e, digits, gold)
+}
+
+// parseGift understands "1116", "Rs 1,116/-", "₹516", "0", "2 sovereigns",
+// "1.5 kasu", "2 కాసులు". Typing one kind keeps the line's other kind.
+func parseGift(s string, e ledger.Entry) (digits string, gold float64, ok bool) {
+	for _, w := range []string{"sovereigns", "sovereign", "sov", "kasulu", "kasu", "కాసులు", "కాసు"} {
+		if i := strings.Index(s, w); i >= 0 {
+			g, err := strconv.ParseFloat(strings.TrimSpace(s[:i]), 64)
+			if err != nil || g < 0 || g > 1000 {
+				return "", 0, false
+			}
+			return e.AmountDigits, g, true
+		}
+	}
+	r := strings.NewReplacer("rs.", "", "rs", "", "₹", "", ",", "", "/-", "", "/", "", " ", "")
+	s = r.Replace(s)
+	if s == "" || !allDigits(s) || len(s) > 9 {
+		return "", 0, false
+	}
+	s = strings.TrimLeft(s, "0")
+	return s, e.Gold, true
+}
+
+func allDigits(s string) bool {
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// confirm stores the family's reading of a gift and answers with today's value.
+func (b *Bot) confirm(ctx context.Context, chat int64, e ledger.Entry, digits string, gold float64) error {
+	if err := b.Store.ConfirmGift(e.ID, digits, gold); err != nil {
+		return err
+	}
+	log.Printf("chat %d: gift on line %d confirmed as %q + %g sovereigns", chat, e.ID, digits, gold)
+	e.AmountDigits, e.Gold, e.Flags, e.Checked = digits, gold, nil, true
+	reply := fmt.Sprintf("Noted: “%s” (%s, %s) gave %s. I'll remember.", e.Text, orUnknown(e.Function), orUnknown(e.Date), Gift(e))
+	if t := TodayValue(e); t != "" {
+		reply += "\n" + t
+	}
+	return b.say(ctx, chat, reply)
 }

@@ -48,7 +48,10 @@ CREATE TABLE IF NOT EXISTS lines (
 	gold          REAL NOT NULL,
 	item          TEXT NOT NULL,
 	flags         TEXT NOT NULL,    -- JSON list of reasons a person should check this line
-	crop          TEXT NOT NULL     -- path of the line's picture, relative to the data dir; "" if none
+	crop          TEXT NOT NULL,    -- path of the line's picture, relative to the data dir; "" if none
+	second_digits TEXT NOT NULL DEFAULT '', -- the amount check's reading (read 2)
+	second_gold   REAL NOT NULL DEFAULT 0,
+	checked       INTEGER NOT NULL DEFAULT 0 -- 1 once the family confirmed the gift in chat
 );
 CREATE TABLE IF NOT EXISTS chats (
 	chat_id INTEGER PRIMARY KEY,
@@ -90,7 +93,41 @@ func Open(dir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
+	if err := migrate(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
 	return &Store{db: db, dir: dir}, nil
+}
+
+// migrate adds columns that ledgers made by older versions lack.
+func migrate(db *sql.DB) error {
+	have := map[string]bool{}
+	rows, err := db.Query(`SELECT name FROM pragma_table_info('lines')`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var n string
+		if err := rows.Scan(&n); err != nil {
+			rows.Close()
+			return err
+		}
+		have[n] = true
+	}
+	rows.Close()
+	for _, c := range []struct{ name, def string }{
+		{"second_digits", "TEXT NOT NULL DEFAULT ''"},
+		{"second_gold", "REAL NOT NULL DEFAULT 0"},
+		{"checked", "INTEGER NOT NULL DEFAULT 0"},
+	} {
+		if !have[c.name] {
+			if _, err := db.Exec(`ALTER TABLE lines ADD COLUMN ` + c.name + ` ` + c.def); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -164,9 +201,10 @@ func (s *Store) AddPage(hash string, p notebook.Page) (PageInfo, error) {
 		if len(flags) > 0 {
 			info.Flagged++
 		}
-		if _, err := tx.Exec(`INSERT INTO lines (page_id, idx, number, text, name, place, amount_digits, gold, item, flags, crop)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			pageID, i, l.Number, l.Text, l.Name, l.Place, l.AmountDigits, l.GoldSovereigns, l.Item, string(fj), crop); err != nil {
+		if _, err := tx.Exec(`INSERT INTO lines (page_id, idx, number, text, name, place, amount_digits, gold, item, flags, crop, second_digits, second_gold)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			pageID, i, l.Number, l.Text, l.Name, l.Place, l.AmountDigits, l.GoldSovereigns, l.Item, string(fj), crop,
+			l.SecondDigits, l.SecondGold); err != nil {
 			return PageInfo{}, fmt.Errorf("insert line: %w", err)
 		}
 	}
@@ -216,12 +254,15 @@ type Entry struct {
 	Item         string
 	Flags        []string
 	Crop         string // absolute path of the line's picture, "" if none
+	SecondDigits string  // the amount check's reading of the cash
+	SecondGold   float64 // and of the gold
+	Checked      bool    // the family confirmed the gift in chat; Flags is then empty
 }
 
 // Entries returns every line in the notebook, page by page.
 func (s *Store) Entries() ([]Entry, error) {
 	rows, err := s.db.Query(`SELECT l.id, p.function, p.date, l.number, l.text, l.name, l.place,
-		l.amount_digits, l.gold, l.item, l.flags, l.crop
+		l.amount_digits, l.gold, l.item, l.flags, l.crop, l.second_digits, l.second_gold, l.checked
 		FROM lines l JOIN pages p ON p.id = l.page_id ORDER BY p.id, l.idx`)
 	if err != nil {
 		return nil, err
@@ -232,7 +273,7 @@ func (s *Store) Entries() ([]Entry, error) {
 		var e Entry
 		var flags string
 		if err := rows.Scan(&e.ID, &e.Function, &e.Date, &e.Number, &e.Text, &e.Name, &e.Place,
-			&e.AmountDigits, &e.Gold, &e.Item, &flags, &e.Crop); err != nil {
+			&e.AmountDigits, &e.Gold, &e.Item, &flags, &e.Crop, &e.SecondDigits, &e.SecondGold, &e.Checked); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(flags), &e.Flags)
@@ -370,4 +411,18 @@ func (s *Store) Entry(id int64) (Entry, bool, error) {
 		}
 	}
 	return Entry{}, false, nil
+}
+
+// ConfirmGift records the gift as the family read it from the handwriting:
+// it replaces the model's reading and clears the line's flags.
+func (s *Store) ConfirmGift(lineID int64, digits string, gold float64) error {
+	res, err := s.db.Exec(`UPDATE lines SET amount_digits = ?, gold = ?, flags = '[]', checked = 1 WHERE id = ?`,
+		digits, gold, lineID)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("line %d not found", lineID)
+	}
+	return nil
 }

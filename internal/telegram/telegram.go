@@ -30,16 +30,33 @@ type CallbackQuery struct {
 }
 
 // Button is one inline button; Data comes back in the CallbackQuery (max 64 bytes).
+// A Button with no Text (NewRow) starts a new row of buttons.
 type Button struct {
 	Text string `json:"text"`
 	Data string `json:"callback_data"`
 }
 
-func keyboard(row []Button) string {
-	if row == nil {
-		row = []Button{}
+// NewRow goes between buttons to put the next ones on a row of their own.
+var NewRow = Button{}
+
+func keyboard(buttons []Button) string {
+	rows := [][]Button{{}}
+	for _, b := range buttons {
+		if b.Text == "" {
+			if len(rows[len(rows)-1]) > 0 {
+				rows = append(rows, []Button{})
+			}
+			continue
+		}
+		rows[len(rows)-1] = append(rows[len(rows)-1], b)
 	}
-	b, _ := json.Marshal(map[string]any{"inline_keyboard": [][]Button{row}})
+	if len(rows) > 1 && len(rows[len(rows)-1]) == 0 {
+		rows = rows[:len(rows)-1]
+	}
+	if len(rows) == 1 && len(rows[0]) == 0 {
+		rows = [][]Button{} // no buttons: clears the keyboard
+	}
+	b, _ := json.Marshal(map[string]any{"inline_keyboard": rows})
 	return string(b)
 }
 
