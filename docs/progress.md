@@ -11,6 +11,7 @@ Handoff notes between build sessions. Read this first, then `/mnt/c/Users/Sriniv
 - Webhooks, not polling, so the Sprite can sleep.
 - Models: **always `gemini-4-hydrogen`; fall back to `claude-haiku-5-5` only when Gemini fails.** Implemented in `internal/vision`.
 - Go, chosen for fast startup.
+- At step 8, or for any hackathon strategy question, check the hackathon-playbook MCP (its `submitting` and `pitching` checklists). Not needed while building steps 2–6.
 - **Sessions are capped at 150k tokens of context.** Near the cap, stop at a clean point, update this file, commit and push, and give the user an exact prompt to continue in a new session.
 - The user prefers going **step by step**, one action at a time, waiting for their screenshot or confirmation.
 
