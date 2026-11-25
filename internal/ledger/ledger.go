@@ -56,6 +56,24 @@ CREATE TABLE IF NOT EXISTS chats (
 );
 CREATE TABLE IF NOT EXISTS updates (
 	update_id INTEGER PRIMARY KEY   -- Telegram updates already handled (it re-delivers on slow replies)
+);
+CREATE TABLE IF NOT EXISTS family (
+	relation TEXT PRIMARY KEY,      -- "father", "mother", or a Telugu relation word (బాబాయి)
+	name     TEXT NOT NULL          -- who it is, surname first
+);
+CREATE TABLE IF NOT EXISTS asks (
+	id          INTEGER PRIMARY KEY, -- goes in the Yes/No buttons
+	line_id     INTEGER NOT NULL,
+	person      TEXT NOT NULL,       -- the name we asked about, as the card wrote it
+	relation    TEXT NOT NULL,       -- the relation word on the line, "" if none
+	asked_at    TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS answers (
+	person_key  TEXT NOT NULL,       -- match.PersonKey: the same person whatever the script or order
+	line_id     INTEGER NOT NULL,
+	yes         INTEGER NOT NULL,
+	answered_at TEXT NOT NULL,
+	PRIMARY KEY (person_key, line_id)
 );`
 
 // Open opens (or creates) the ledger in dir.
@@ -163,6 +181,15 @@ func (s *Store) DeletePage(id int64) error {
 		return err
 	}
 	defer tx.Rollback()
+	// Answers about these lines go too: the new reading gives new line IDs.
+	for _, q := range []string{
+		`DELETE FROM answers WHERE line_id IN (SELECT id FROM lines WHERE page_id = ?)`,
+		`DELETE FROM asks WHERE line_id IN (SELECT id FROM lines WHERE page_id = ?)`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.Exec(`DELETE FROM lines WHERE page_id = ?`, id); err != nil {
 		return err
 	}
@@ -242,4 +269,105 @@ func (s *Store) FirstDelivery(updateID int64) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n == 1, nil
+}
+
+// Family returns what the household told us: "father", "mother", and relation
+// words, each with a name.
+func (s *Store) Family() (map[string]string, error) {
+	rows, err := s.db.Query(`SELECT relation, name FROM family`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var r, n string
+		if err := rows.Scan(&r, &n); err != nil {
+			return nil, err
+		}
+		out[r] = n
+	}
+	return out, rows.Err()
+}
+
+// SetFamily records who a relation is; an empty name forgets it.
+func (s *Store) SetFamily(relation, name string) error {
+	if strings.TrimSpace(name) == "" {
+		_, err := s.db.Exec(`DELETE FROM family WHERE relation = ?`, relation)
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO family (relation, name) VALUES (?, ?)
+		ON CONFLICT(relation) DO UPDATE SET name = excluded.name`, relation, strings.TrimSpace(name))
+	return err
+}
+
+// Ask is one "Is this them?" question sent with Yes/No buttons.
+type Ask struct {
+	ID       int64
+	LineID   int64
+	Person   string
+	Relation string
+}
+
+func (s *Store) AddAsk(a Ask) (int64, error) {
+	res, err := s.db.Exec(`INSERT INTO asks (line_id, person, relation, asked_at) VALUES (?, ?, ?, ?)`,
+		a.LineID, a.Person, a.Relation, time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) GetAsk(id int64) (Ask, bool, error) {
+	a := Ask{ID: id}
+	err := s.db.QueryRow(`SELECT line_id, person, relation FROM asks WHERE id = ?`, id).Scan(&a.LineID, &a.Person, &a.Relation)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Ask{}, false, nil
+	}
+	return a, err == nil, err
+}
+
+// SetAnswer remembers whether a line is this person; a later answer replaces it.
+func (s *Store) SetAnswer(personKey string, lineID int64, yes bool) error {
+	_, err := s.db.Exec(`INSERT INTO answers (person_key, line_id, yes, answered_at) VALUES (?, ?, ?, ?)
+		ON CONFLICT(person_key, line_id) DO UPDATE SET yes = excluded.yes, answered_at = excluded.answered_at`,
+		personKey, lineID, yes, time.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// Answers returns every remembered answer: person key -> line ID -> yes.
+func (s *Store) Answers() (map[string]map[int64]bool, error) {
+	rows, err := s.db.Query(`SELECT person_key, line_id, yes FROM answers`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[int64]bool{}
+	for rows.Next() {
+		var k string
+		var id int64
+		var yes bool
+		if err := rows.Scan(&k, &id, &yes); err != nil {
+			return nil, err
+		}
+		if out[k] == nil {
+			out[k] = map[int64]bool{}
+		}
+		out[k][id] = yes
+	}
+	return out, rows.Err()
+}
+
+// Entry returns one line by ID.
+func (s *Store) Entry(id int64) (Entry, bool, error) {
+	es, err := s.Entries()
+	if err != nil {
+		return Entry{}, false, err
+	}
+	for _, e := range es {
+		if e.ID == id {
+			return e, true, nil
+		}
+	}
+	return Entry{}, false, nil
 }

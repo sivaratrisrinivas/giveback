@@ -17,8 +17,30 @@ import (
 )
 
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message"`
+	CallbackQuery *CallbackQuery `json:"callback_query"` // a tap on one of our buttons
+}
+
+// CallbackQuery is a tap on an inline button.
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	Data    string   `json:"data"`    // what we put in the button
+	Message *Message `json:"message"` // the message the button was on
+}
+
+// Button is one inline button; Data comes back in the CallbackQuery (max 64 bytes).
+type Button struct {
+	Text string `json:"text"`
+	Data string `json:"callback_data"`
+}
+
+func keyboard(row []Button) string {
+	if row == nil {
+		row = []Button{}
+	}
+	b, _ := json.Marshal(map[string]any{"inline_keyboard": [][]Button{row}})
+	return string(b)
 }
 
 type Message struct {
@@ -66,7 +88,27 @@ func New(token string) *Client {
 }
 
 func (c *Client) SendMessage(ctx context.Context, chatID int64, text string) error {
-	return c.call(ctx, "sendMessage", map[string]any{"chat_id": chatID, "text": text}, nil)
+	return c.SendText(ctx, chatID, text, nil)
+}
+
+// SendText sends a message with a row of buttons under it (none if nil).
+func (c *Client) SendText(ctx context.Context, chatID int64, text string, buttons []Button) error {
+	p := map[string]any{"chat_id": chatID, "text": text}
+	if buttons != nil {
+		p["reply_markup"] = json.RawMessage(keyboard(buttons))
+	}
+	return c.call(ctx, "sendMessage", p, nil)
+}
+
+// AnswerCallback stops the button's spinner and shows a short notice.
+func (c *Client) AnswerCallback(ctx context.Context, id, text string) error {
+	return c.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": id, "text": text}, nil)
+}
+
+// ClearButtons removes the buttons from a message once they are answered.
+func (c *Client) ClearButtons(ctx context.Context, chatID, messageID int64) error {
+	return c.call(ctx, "editMessageReplyMarkup", map[string]any{"chat_id": chatID, "message_id": messageID,
+		"reply_markup": json.RawMessage(keyboard(nil))}, nil)
 }
 
 // SendChatAction shows "typing…" or "sending photo…" while we work.
@@ -74,8 +116,8 @@ func (c *Client) SendChatAction(ctx context.Context, chatID int64, action string
 	return c.call(ctx, "sendChatAction", map[string]any{"chat_id": chatID, "action": action}, nil)
 }
 
-// SendPhoto uploads a local image with a caption.
-func (c *Client) SendPhoto(ctx context.Context, chatID int64, path, caption string) error {
+// SendPhoto uploads a local image with a caption and a row of buttons (none if nil).
+func (c *Client) SendPhoto(ctx context.Context, chatID int64, path, caption string, buttons []Button) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -85,6 +127,9 @@ func (c *Client) SendPhoto(ctx context.Context, chatID int64, path, caption stri
 	w := multipart.NewWriter(&body)
 	w.WriteField("chat_id", fmt.Sprint(chatID))
 	w.WriteField("caption", caption)
+	if buttons != nil {
+		w.WriteField("reply_markup", keyboard(buttons))
+	}
 	part, err := w.CreateFormFile("photo", filepath.Base(path))
 	if err != nil {
 		return err

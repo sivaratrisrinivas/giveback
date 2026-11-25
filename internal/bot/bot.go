@@ -12,6 +12,8 @@ import (
 	_ "image/png"
 	"log"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -29,7 +31,10 @@ import (
 type Messenger interface {
 	SendMessage(ctx context.Context, chatID int64, text string) error
 	SendChatAction(ctx context.Context, chatID int64, action string) error
-	SendPhoto(ctx context.Context, chatID int64, path, caption string) error
+	SendText(ctx context.Context, chatID int64, text string, buttons []telegram.Button) error
+	SendPhoto(ctx context.Context, chatID int64, path, caption string, buttons []telegram.Button) error
+	AnswerCallback(ctx context.Context, id, text string) error
+	ClearButtons(ctx context.Context, chatID, messageID int64) error
 	Download(ctx context.Context, fileID string) ([]byte, error)
 }
 
@@ -52,7 +57,10 @@ const help = `Namaskaram! I keep your family's gift notebook.
 
 • To add notebook pages: send /pages, then send each page as a photo (sending it as a File keeps it sharpest). Send /done when finished.
 • When an invitation card arrives: forward the card's photo here. I'll show what that family gave, with the handwritten line.
-• Or type a name to look it up.
+• Or type a name to look it up (a relation word like babai works too).
+• Tell me about the family once, so I can work out relation words like బాబాయి:
+  /family father = Bandaru Subba Rao
+  /family mother = Butham Lakshmi   (her maiden name, surname first)
 
 I never decide what you should give, and when I'm not sure, I ask.`
 
@@ -63,6 +71,9 @@ func (b *Bot) Handle(ctx context.Context, u telegram.Update) error {
 	defer b.mu.Unlock()
 	if first, err := b.Store.FirstDelivery(u.UpdateID); err != nil || !first {
 		return err // a re-delivery of something already handled
+	}
+	if q := u.CallbackQuery; q != nil {
+		return b.answer(ctx, q)
 	}
 	m := u.Message
 	if m == nil {
@@ -89,6 +100,8 @@ func (b *Bot) Handle(ctx context.Context, u telegram.Update) error {
 			return err
 		}
 		return b.say(ctx, chat, fmt.Sprintf("Done. The notebook now has %d lines. Forward an invitation card whenever one arrives.", len(n)))
+	case cmd == "/family" || strings.HasPrefix(cmd, "/family "):
+		return b.family(ctx, chat, strings.TrimSpace(text[len("/family"):]))
 	}
 
 	if fileID, ok := m.ImageFileID(); ok {
@@ -197,14 +210,33 @@ func (b *Bot) answerCard(ctx context.Context, chat int64, data []byte) error {
 	var persons []match.Person
 	for _, p := range people {
 		who = append(who, p.NameEnglish)
-		persons = append(persons, match.Person{Names: []string{p.NameEnglish, p.NameTelugu}, Place: p.Place})
+		persons = append(persons, match.Person{Names: []string{p.NameEnglish, p.NameTelugu}, Surname: p.Surname, Place: p.Place})
 	}
 	b.say(ctx, chat, fmt.Sprintf("Invitation: %s%s, from %s.", orUnknown(inv.FunctionType), onDate(inv.Date), strings.Join(who, ", ")))
 	return b.lookup(ctx, chat, persons, who)
 }
 
+// matcher loads what the family has told us.
+func (b *Bot) matcher() (match.Matcher, error) {
+	fam, err := b.Store.Family()
+	if err != nil {
+		return match.Matcher{}, err
+	}
+	ans, err := b.Store.Answers()
+	if err != nil {
+		return match.Matcher{}, err
+	}
+	m := match.Matcher{Family: match.Family{Father: fam["father"], Mother: fam["mother"], Links: map[string]string{}}, Answers: ans}
+	for r, n := range fam {
+		if r != "father" && r != "mother" {
+			m.Family.Links[r] = n
+		}
+	}
+	return m, nil
+}
+
 // lookup finds and shows the notebook lines for these people. names are how
-// to call them in the reply ("" for a typed search).
+// to call them in the reply (nil for a typed search).
 func (b *Bot) lookup(ctx context.Context, chat int64, persons []match.Person, names []string) error {
 	entries, err := b.Store.Entries()
 	if err != nil {
@@ -213,17 +245,29 @@ func (b *Bot) lookup(ctx context.Context, chat int64, persons []match.Person, na
 	if len(entries) == 0 {
 		return b.say(ctx, chat, "The notebook is empty so far. Send /pages to add its pages first.")
 	}
-	// One line may match several people on the card (husband and wife): show it once.
+	m, err := b.matcher()
+	if err != nil {
+		return err
+	}
+	// One line may match several people on the card (husband and wife): show
+	// it once, for whoever it matches best.
+	type shown struct {
+		hit match.Hit
+		who string
+	}
 	var order []int64
-	best := map[int64]match.Hit{}
+	best := map[int64]shown{}
+	hidden := 0
 	for _, p := range persons {
-		for _, h := range match.Find(p, entries, 5) {
+		hits, skipped := m.Find(p, entries, 5)
+		hidden += skipped
+		for _, h := range hits {
 			old, seen := best[h.Entry.ID]
 			if !seen {
 				order = append(order, h.Entry.ID)
 			}
-			if !seen || len(h.Shared) > len(old.Shared) {
-				best[h.Entry.ID] = h
+			if !seen || h.Strength > old.hit.Strength || (h.Strength == old.hit.Strength && len(h.Shared) > len(old.hit.Shared)) {
+				best[h.Entry.ID] = shown{h, p.Display()}
 			}
 		}
 	}
@@ -232,34 +276,175 @@ func (b *Bot) lookup(ctx context.Context, chat int64, persons []match.Person, na
 		if len(names) > 0 {
 			who = strings.Join(names, ", ")
 		}
-		return b.say(ctx, chat, fmt.Sprintf("I couldn't find %s in the notebook. They may be written differently (a relation word like మామ, or initials); you can type another spelling to look it up.", who))
+		msg := fmt.Sprintf("I couldn't find %s in the notebook. They may be written differently (a relation word like మామ, or initials); you can type another spelling to look it up.", who)
+		if hidden > 0 {
+			msg += fmt.Sprintf(" (%d line(s) you told me aren't them are left out.)", hidden)
+		}
+		return b.say(ctx, chat, msg)
 	}
+	// Strongest first across all the people on the card.
+	sort.SliceStable(order, func(i, j int) bool { return best[order[i]].hit.Strength > best[order[j]].hit.Strength })
 	b.TG.SendChatAction(ctx, chat, "upload_photo")
 	for _, id := range order {
-		h := best[id]
-		caption := Caption(h)
-		if h.Entry.Crop == "" {
-			if err := b.say(ctx, chat, caption+"\n(No picture of this line was kept.)"); err != nil {
+		s := best[id]
+		caption := Caption(s.hit, s.who)
+		var buttons []telegram.Button
+		if s.hit.Strength == match.Weak {
+			relation := ""
+			if s.hit.Relation != nil && len(s.hit.Shared) == 0 {
+				relation = s.hit.Relation.Word // a bare relation word: a Yes also says who that word means
+			}
+			askID, err := b.Store.AddAsk(ledger.Ask{LineID: id, Person: s.who, Relation: relation})
+			if err != nil {
 				return err
 			}
+			buttons = []telegram.Button{
+				{Text: "✅ Yes, it's them", Data: fmt.Sprintf("y:%d", askID)},
+				{Text: "❌ No", Data: fmt.Sprintf("n:%d", askID)},
+			}
+		}
+		if s.hit.Entry.Crop == "" {
+			b.TG.SendText(ctx, chat, caption+"\n(No picture of this line was kept.)", buttons)
 			continue
 		}
-		if err := b.TG.SendPhoto(ctx, chat, h.Entry.Crop, caption); err != nil {
+		if err := b.TG.SendPhoto(ctx, chat, s.hit.Entry.Crop, caption, buttons); err != nil {
 			log.Printf("chat %d: send crop: %v", chat, err)
-			b.say(ctx, chat, caption)
+			b.TG.SendText(ctx, chat, caption, buttons)
 		}
+	}
+	if hidden > 0 {
+		b.say(ctx, chat, fmt.Sprintf("(%d line(s) you told me aren't them are left out.)", hidden))
 	}
 	return nil
 }
 
-// Caption describes one notebook line under its handwritten picture.
-func Caption(h match.Hit) string {
+// answer handles a tap on "Yes, it's them" / "No" and remembers it.
+func (b *Bot) answer(ctx context.Context, q *telegram.CallbackQuery) error {
+	var chat, msgID int64
+	if q.Message != nil {
+		chat, msgID = q.Message.Chat.ID, q.Message.MessageID
+	}
+	kind, idText, _ := strings.Cut(q.Data, ":")
+	askID, err := strconv.ParseInt(idText, 10, 64)
+	if err != nil || (kind != "y" && kind != "n") {
+		return b.TG.AnswerCallback(ctx, q.ID, "")
+	}
+	a, ok, err := b.Store.GetAsk(askID)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		b.TG.AnswerCallback(ctx, q.ID, "That question is out of date (the page was read again).")
+		return nil
+	}
+	yes := kind == "y"
+	if err := b.Store.SetAnswer(match.PersonKey(a.Person), a.LineID, yes); err != nil {
+		return err
+	}
+	e, _, err := b.Store.Entry(a.LineID)
+	if err != nil {
+		return err
+	}
+	where := fmt.Sprintf("“%s” (%s, %s)", e.Text, orUnknown(e.Function), orUnknown(e.Date))
+	var reply string
+	if yes {
+		reply = fmt.Sprintf("Noted: %s is %s. I'll remember.", where, a.Person)
+		if a.Relation != "" {
+			fam, err := b.Store.Family()
+			if err != nil {
+				return err
+			}
+			if old, ok := fam[a.Relation]; !ok || old == "" {
+				if err := b.Store.SetFamily(a.Relation, a.Person); err != nil {
+					return err
+				}
+				reply += fmt.Sprintf(" From now on %s in the notebook means %s (change it with /family %s = <name>).", a.Relation, a.Person, a.Relation)
+			}
+		}
+	} else {
+		reply = fmt.Sprintf("Noted: %s is not %s. I won't show it for them again.", where, a.Person)
+	}
+	log.Printf("chat %d: answer %s for line %d = %v", chat, a.Person, a.LineID, yes)
+	b.TG.AnswerCallback(ctx, q.ID, "Noted")
+	if msgID != 0 {
+		b.TG.ClearButtons(ctx, chat, msgID)
+	}
+	return b.say(ctx, chat, reply)
+}
+
+// family shows or changes the family tree: "/family father = Bandaru Subba Rao".
+func (b *Bot) family(ctx context.Context, chat int64, arg string) error {
+	if arg == "" {
+		fam, err := b.Store.Family()
+		if err != nil {
+			return err
+		}
+		var sb strings.Builder
+		sb.WriteString("What I know about the family:")
+		if len(fam) == 0 {
+			sb.WriteString(" nothing yet.")
+		}
+		for _, r := range []string{"father", "mother"} {
+			if n, ok := fam[r]; ok {
+				fmt.Fprintf(&sb, "\n• %s: %s", r, n)
+			}
+		}
+		var rels []string
+		for r := range fam {
+			if r != "father" && r != "mother" {
+				rels = append(rels, r)
+			}
+		}
+		sort.Strings(rels)
+		for _, r := range rels {
+			fmt.Fprintf(&sb, "\n• %s: %s", r, fam[r])
+		}
+		sb.WriteString("\n\nTo change it:\n/family father = Bandaru Subba Rao\n/family mother = Butham Lakshmi (maiden name, surname first)\n/family babai = Bandaru Ramulu\n/family babai =   (forgets it)")
+		return b.say(ctx, chat, sb.String())
+	}
+	rel, name, ok := strings.Cut(arg, "=")
+	if !ok {
+		return b.say(ctx, chat, "Please write it like this: /family father = Bandaru Subba Rao")
+	}
+	rel, name = strings.TrimSpace(rel), strings.TrimSpace(name)
+	key := ""
+	switch strings.ToLower(rel) {
+	case "father", "nanna", "నాన్న":
+		key = "father"
+	case "mother", "amma", "అమ్మ":
+		key = "mother"
+	default:
+		r, ok := match.RelationOf(strings.ReplaceAll(rel, " ", ""))
+		if !ok {
+			return b.say(ctx, chat, fmt.Sprintf("I don't know the relation word %q. Try father, mother, or a word like mama, atha, babai, peddananna, pinni.", rel))
+		}
+		key = r.Word
+	}
+	if err := b.Store.SetFamily(key, name); err != nil {
+		return err
+	}
+	if name == "" {
+		return b.say(ctx, chat, fmt.Sprintf("Forgotten: %s.", key))
+	}
+	return b.say(ctx, chat, fmt.Sprintf("Noted: %s = %s.", key, name))
+}
+
+// Caption describes one notebook line under its handwritten picture. who is
+// the person it may be.
+func Caption(h match.Hit, who string) string {
 	e := h.Entry
 	var sb strings.Builder
-	if h.Strength == match.Strong {
-		sb.WriteString("Found in the notebook:\n")
-	} else {
-		fmt.Fprintf(&sb, "Is this them? Only the name %q matches.\n", strings.Join(h.Shared, " "))
+	switch h.Strength {
+	case match.Confirmed:
+		fmt.Fprintf(&sb, "Found in the notebook (%s):\n", h.Why)
+	case match.Strong:
+		sb.WriteString("Found in the notebook")
+		if h.Why != "" {
+			fmt.Fprintf(&sb, " (%s)", h.Why)
+		}
+		sb.WriteString(":\n")
+	default:
+		fmt.Fprintf(&sb, "Is this %s? %s.\n", who, capitalize(h.Why))
 	}
 	fmt.Fprintf(&sb, "%s, %s", orUnknown(e.Function), orUnknown(e.Date))
 	if e.Number != "" {
@@ -270,6 +455,14 @@ func Caption(h match.Hit) string {
 		fmt.Fprintf(&sb, "\n⚠️ Please check the handwriting: %s", strings.Join(e.Flags, "; "))
 	}
 	return sb.String()
+}
+
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
 }
 
 // Gift says what a line records: cash, gold by weight, or an item.

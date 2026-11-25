@@ -19,21 +19,33 @@ import (
 
 // fakeTG records what the bot sends and serves "downloads" from a map.
 type fakeTG struct {
-	files  map[string][]byte
-	texts  []string
-	photos []string // captions
+	files   map[string][]byte
+	texts   []string
+	photos  []string            // captions
+	buttons [][]telegram.Button // buttons sent with each photo, in order
+	cleared int                 // messages whose buttons were removed
 }
 
 func (f *fakeTG) SendMessage(_ context.Context, _ int64, text string) error {
 	f.texts = append(f.texts, text)
 	return nil
 }
+func (f *fakeTG) SendText(_ context.Context, _ int64, text string, _ []telegram.Button) error {
+	f.texts = append(f.texts, text)
+	return nil
+}
 func (f *fakeTG) SendChatAction(context.Context, int64, string) error { return nil }
-func (f *fakeTG) SendPhoto(_ context.Context, _ int64, path, caption string) error {
+func (f *fakeTG) SendPhoto(_ context.Context, _ int64, path, caption string, buttons []telegram.Button) error {
 	if _, err := os.Stat(path); err != nil {
 		return err
 	}
 	f.photos = append(f.photos, caption)
+	f.buttons = append(f.buttons, buttons)
+	return nil
+}
+func (f *fakeTG) AnswerCallback(context.Context, string, string) error { return nil }
+func (f *fakeTG) ClearButtons(context.Context, int64, int64) error {
+	f.cleared++
 	return nil
 }
 func (f *fakeTG) Download(_ context.Context, id string) ([]byte, error) {
@@ -179,21 +191,138 @@ func TestThinSlice(t *testing.T) {
 		}
 	}
 
-	// A typed name that shares only one word is asked about, not stated.
-	tg.photos = nil
+	if tg.buttons[0] != nil || tg.buttons[1] != nil {
+		t.Errorf("strong matches must not ask: %v", tg.buttons)
+	}
+
+	// A typed name that shares only one word is asked about, with buttons.
+	tg.photos, tg.buttons = nil, nil
 	send(msg(7, telegram.Message{Text: "Muthyalu"}))
 	if len(tg.photos) != 2 {
 		t.Fatalf("typed lookup sent %d pictures, want 2", len(tg.photos))
 	}
-	for _, c := range tg.photos {
-		if !strings.HasPrefix(c, "Is this them?") {
-			t.Errorf("one shared word must be asked about: %q", c)
+	for i, c := range tg.photos {
+		if !strings.HasPrefix(c, "Is this Muthyalu?") || len(tg.buttons[i]) != 2 {
+			t.Errorf("one shared word must be asked about: %q %v", c, tg.buttons[i])
 		}
+	}
+
+	// Tap "No" on the first, "Yes" on the second: buttons go away, answers stick.
+	tap := func(id int64, data string) {
+		t.Helper()
+		send(telegram.Update{UpdateID: id, CallbackQuery: &telegram.CallbackQuery{ID: "q", Data: data,
+			Message: &telegram.Message{MessageID: 99, Chat: tg.chat()}}})
+	}
+	tap(8, tg.buttons[0][1].Data)
+	if !strings.Contains(tg.texts[len(tg.texts)-1], "is not Muthyalu") {
+		t.Errorf("no reply: %q", tg.texts[len(tg.texts)-1])
+	}
+	tap(9, tg.buttons[1][0].Data)
+	tap(9, tg.buttons[1][0].Data) // Telegram re-delivers: handled once
+	if tg.cleared != 2 {
+		t.Errorf("buttons cleared on %d messages, want 2", tg.cleared)
+	}
+	tg.photos, tg.buttons = nil, nil
+	send(msg(10, telegram.Message{Text: "Muthyalu"}))
+	if len(tg.photos) != 1 || !strings.Contains(tg.photos[0], "you confirmed this is Muthyalu") || tg.buttons[0] != nil {
+		t.Errorf("after answers: %q %v", tg.photos, tg.buttons)
+	}
+	if !strings.Contains(tg.texts[len(tg.texts)-1], "1 line(s) you told me aren't them") {
+		t.Errorf("hidden line not mentioned: %q", tg.texts[len(tg.texts)-1])
+	}
+}
+
+func (f *fakeTG) chat() (c struct {
+	ID int64 `json:"id"`
+}) {
+	c.ID = 7
+	return c
+}
+
+// A bare relation word is tied to a person through the family tree, and a
+// Yes teaches the bot who the word means.
+func TestRelationAskAndRemember(t *testing.T) {
+	store, err := ledger.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.AddPage("h1", notebook.Page{Function: "పద్మ పెళ్ళి", Date: "12-2-1994", Lines: []notebook.Line{
+		{Number: "3", Text: "పెద్దనాన్న - 1 కాసు ఉంగరం", Name: "పెద్దనాన్న", GoldSovereigns: 1, Item: "ఉంగరం"},
+		{Number: "7", Text: "బాబాయి - Rs 216/-", Name: "బాబాయి", AmountDigits: "216"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.AddPage("h2", notebook.Page{Function: "గృహప్రవేశం", Date: "8-6-2003", Lines: []notebook.Line{
+		{Number: "5", Text: "బాబాయి - 2 కాసులు గొలుసు", Name: "బాబాయి", GoldSovereigns: 2, Item: "గొలుసు"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := &fakeTG{}
+	b := &Bot{Store: store, TG: tg}
+	ctx := context.Background()
+	send := func(u telegram.Update) {
+		t.Helper()
+		if err := b.Handle(ctx, u); err != nil {
+			t.Fatal(err)
+		}
+	}
+	last := func() string { return tg.texts[len(tg.texts)-1] }
+
+	// No family tree yet: nothing to go on.
+	send(msg(1, telegram.Message{Text: "Bandaru Ramulu"}))
+	if !strings.Contains(last(), "couldn't find") {
+		t.Fatalf("without a family tree: %q", last())
+	}
+	send(msg(2, telegram.Message{Text: "/family father = Bandaru Subba Rao"}))
+	send(msg(3, telegram.Message{Text: "/family mother = Butham Lakshmi"}))
+	if !strings.Contains(last(), "Noted: mother = Butham Lakshmi") {
+		t.Fatalf("family reply: %q", last())
+	}
+	// The lines have no pictures here, so they come back as texts.
+	tg.texts = nil
+	send(msg(4, telegram.Message{Text: "Bandaru Ramulu"}))
+	if len(tg.texts) != 3 {
+		t.Fatalf("want 3 asks, got %q", tg.texts)
+	}
+	for _, c := range tg.texts {
+		if !strings.HasPrefix(c, "Is this Bandaru Ramulu? The line says") || !strings.Contains(c, "Bandaru is your father's surname") {
+			t.Errorf("ask: %q", c)
+		}
+	}
+	// Yes to the first బాబాయి line (ask IDs follow the order shown: 3, 7, 5).
+	asks := []int64{1, 2, 3}
+	a, _, _ := store.GetAsk(asks[1])
+	if a.Relation != "బాబాయి" {
+		t.Fatalf("ask 2 is %+v", a)
+	}
+	send(telegram.Update{UpdateID: 5, CallbackQuery: &telegram.CallbackQuery{ID: "q", Data: "y:2"}})
+	if !strings.Contains(last(), "From now on బాబాయి in the notebook means Bandaru Ramulu") {
+		t.Errorf("yes reply: %q", last())
+	}
+	send(telegram.Update{UpdateID: 6, CallbackQuery: &telegram.CallbackQuery{ID: "q", Data: "n:1"}})
+
+	tg.texts = nil
+	send(msg(7, telegram.Message{Text: "Bandaru Ramulu"}))
+	got := strings.Join(tg.texts, "\n---\n")
+	for _, want := range []string{"Found in the notebook (you confirmed this is Bandaru Ramulu)", "Found in the notebook (బాబాయి is Bandaru Ramulu, as you told me)", "Gave: 2 sovereigns of gold + గొలుసు", "1 line(s) you told me aren't them"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("after answers, missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "Is this") {
+		t.Errorf("still asking:\n%s", got)
+	}
+	send(msg(8, telegram.Message{Text: "/family"}))
+	if !strings.Contains(last(), "• బాబాయి: Bandaru Ramulu") {
+		t.Errorf("/family: %q", last())
 	}
 }
 
 func hit(shared string, e ledger.Entry) match.Hit {
-	return match.Hit{Entry: e, Shared: []string{shared}, Strength: match.Weak}
+	return match.Hit{Entry: e, Shared: []string{shared}, Strength: match.Weak, Why: "only the name “" + shared + "” matches"}
 }
 
 func tinyJPEG(t *testing.T) []byte {
@@ -206,8 +335,8 @@ func tinyJPEG(t *testing.T) []byte {
 
 func TestCaptionFlagsAndWeakMatch(t *testing.T) {
 	c := Caption(hit("muthyalu", ledger.Entry{Function: "గృహప్రవేశం", Date: "8-6-2003", Number: "8", Text: "Muthyalu, Chityal - 101/-",
-		AmountDigits: "101", Flags: []string{"amount read as ₹101, then as ₹10"}}))
-	for _, want := range []string{"Is this them?", "Gave: ₹101", "⚠️ Please check the handwriting: amount read as ₹101, then as ₹10"} {
+		AmountDigits: "101", Flags: []string{"amount read as ₹101, then as ₹10"}}), "Butham Muthyalu")
+	for _, want := range []string{"Is this Butham Muthyalu? Only the name “muthyalu” matches.", "Gave: ₹101", "⚠️ Please check the handwriting: amount read as ₹101, then as ₹10"} {
 		if !strings.Contains(c, want) {
 			t.Errorf("caption %q lacks %q", c, want)
 		}
