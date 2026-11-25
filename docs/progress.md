@@ -62,6 +62,6 @@ Card: `/mnt/c/Users/Srinivas/Downloads/jayaprakash.jpeg` (a real card, kept out 
 
 ## Next session: start here
 
-1. **Notebook pages.** The user asked whether Claude can write the pages *in their handwriting* from a sample instead of copying them by hand. Answer given: possible to try with an image model, but Telugu glyphs from image models are often malformed, the true answers must match the pixels exactly, and the README must then say the pages are AI-rendered. Recommended: the user handwrites at least page 1 (10 lines). Settle this with the user first.
+1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
 2. Build the page reader: one request per page returns lines with text, amount digits, and a bounding box. Read amounts a second time with a different prompt and flag any disagreement. Crop each line with Go `image` (+ `golang.org/x/image/draw` for resizing). Score against `docs/synthetic-notebook.md`.
 3. Matching card hosts to ledger lines: transliteration-aware fuzzy match (Telugu script and English), surname-first order, initials ("B." → Butham), relation words (మామ → mother's brother) resolved through the family tree; rank, then ask "Is this them?".

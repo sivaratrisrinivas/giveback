@@ -10,7 +10,7 @@ Tip: use a blue ballpoint, take the photo in daylight, and keep the phone a litt
 
 | # | Write this | Ground truth |
 |---|---|---|
-| 1 | ముత్యాలు మామ, నల్లగొండ — Rs 516/- | Butham Muthyalu (Lakshmi's brother), ₹516 |
+| 1 | ముత్యాలు భూతం — Rs 516/- | Butham Muthyalu (Lakshmi's brother), ₹516. Written given-name first, the reverse of the card's "Butham Muthyalu" |
 | 2 | K. Ramana Reddy, Miryalaguda — 116/- | Kothapalli Venkata Ramana Reddy, ₹116 |
 | 3 | పెద్దనాన్న — 1 కాసు ఉంగరం | Bandaru Venkaiah (father's elder brother), gold ring, 1 sovereign |
 | 4 | Puram Nagaiah, Bollaram — Rs 101/- | Puram Nagaiah, ₹101 |
@@ -34,9 +34,14 @@ Tip: use a blue ballpoint, take the photo in daylight, and keep the phone a litt
 | 7 | Narsimha (Nalgonda) — 516/- | Butham Narsimha, ₹516 |
 | 8 | Muthyalu, Chityal — 101/- | The other Muthyalu, ₹101 |
 
+## Photos
+
+The handwritten pages are in `testdata/notebook/`: `page1.jpeg` (straight), `page1-rotated.jpeg` (same page turned 90°), `page2.jpeg` (has faint mirrored show-through from the other side of the sheet: the reader must ignore it).
+
 ## Traps built in on purpose
 
-- **Same person, different spellings:** row 1.1 "ముత్యాలు మామ" (relation word) and row 2.1 "భూతం ముత్యాలు" (full name) are the same person. The card says "Sri Butham Muthyalu".
+- **Same person, different order and script:** row 1.1 "ముత్యాలు భూతం" (given name first) and row 2.1 "భూతం ముత్యాలు" (surname first) are the same person. The card says "Sri Butham Muthyalu".
+- **Relation words instead of names:** పెద్దనాన్న (1.3), బాబాయి (1.7, 2.5), పిన్ని (1.9), విమల అత్త (2.3).
 - **Same first name, different person:** "Muthyalu, Chityal" must not be merged with Butham Muthyalu.
 - **Same surname, different person:** "B. Narsimha" shares the initial B. and the town Nalgonda.
 - **116 vs 1,116:** rows 1.2, 1.5 and 2.1.

@@ -1,0 +1,179 @@
+<title>Giveback Notebook Copy Sheet</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;600&family=Noto+Sans:wght@400;600&family=Space+Grotesk:wght@500;700&display=swap">
+<style>
+/* Layout: two notebook pages, one ruled line per entry, big Telugu with room above and below; a slowed-down letter guide after them. */
+:root {
+  --paper: #f7f9fc;
+  --sheet: #ffffff;
+  --ink: #1b2a4a;
+  --pen: #1f4fd1;
+  --rule: #c9d6ee;
+  --margin: #e0868b;
+  --muted: #5b6785;
+  --chip: #eaf0fb;
+  --te: "Noto Sans Telugu", "Nirmala UI", "Gautami", sans-serif;
+  --body: "Noto Sans", "Segoe UI", system-ui, sans-serif;
+  --head: "Space Grotesk", "Noto Sans", system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #0f1522; --sheet: #161e30; --ink: #e6ecf8; --pen: #8fb0ff; --rule: #2a3958;
+  --margin: #b4585e; --muted: #9aa6c2; --chip: #1f2a44; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #0f1522; --sheet: #161e30; --ink: #e6ecf8; --pen: #8fb0ff; --rule: #2a3958;
+  --margin: #b4585e; --muted: #9aa6c2; --chip: #1f2a44; color-scheme: dark }
+
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 16px; line-height: 1.55; }
+.wrap { max-width: 860px; margin: 0 auto; padding-block: 2rem 4rem;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 2.5rem; }
+h1, h2 { font-family: var(--head); text-wrap: balance; margin: 0; }
+h1 { font-size: 1.9rem; }
+h2 { font-size: 1.3rem; }
+.lede { color: var(--muted); max-width: 65ch; margin: .4rem 0 0; }
+.tips { display: grid; gap: .35rem; margin: 1rem 0 0; padding-left: 1.2rem; max-width: 65ch; }
+
+.page { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.page header { padding: 1rem 1.25rem; border-bottom: 2px solid var(--rule); display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: baseline; }
+.page header .label { font-family: var(--head); font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+
+.heading-line { padding: 1.1rem 1.25rem 1rem 3.6rem; border-bottom: 1px solid var(--rule); position: relative; }
+ol { list-style: none; margin: 0; padding: 0; counter-reset: n; }
+li { counter-increment: n; position: relative; padding: 1.1rem 1.25rem 1rem 3.6rem; border-bottom: 1px solid var(--rule); min-width: 0; }
+li:last-child { border-bottom: 0; }
+li::before { content: counter(n); position: absolute; left: 0; top: 1.3rem; width: 2.6rem; text-align: right;
+  font-family: var(--head); color: var(--muted); font-variant-numeric: tabular-nums; }
+.heading-line::after, li::after { content: ""; position: absolute; left: 3rem; top: 0; bottom: 0; width: 1px; background: var(--margin); opacity: .7; }
+
+.write { font-size: 1.75rem; line-height: 2.1; color: var(--pen); display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 .6em; word-break: keep-all; }
+.write .te { font-family: var(--te); letter-spacing: .03em; }
+.write .en { font-family: var(--body); }
+.write .sep { color: var(--muted); }
+.say { font-size: .92rem; color: var(--muted); margin-top: .2rem; }
+.say b { color: var(--ink); font-weight: 600; }
+
+.guide-intro { color: var(--muted); max-width: 65ch; margin: .4rem 0 0; }
+.words { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; margin-top: 1rem; }
+.word { background: var(--sheet); border: 1px solid var(--rule); border-radius: 6px; padding: .9rem 1rem; display: grid; gap: .35rem; min-width: 0; }
+.word .whole { font-family: var(--te); font-size: 2.2rem; line-height: 1.9; color: var(--pen); }
+.word .parts { display: flex; flex-wrap: wrap; gap: 6px; }
+.word .parts span { font-family: var(--te); font-size: 1.5rem; line-height: 1.8; background: var(--chip); border-radius: 4px; padding: 0 .45rem; }
+.word .rom { font-size: .9rem; color: var(--muted); }
+.word .rom b { color: var(--ink); }
+.note { font-size: .9rem; color: var(--muted); max-width: 65ch; }
+
+@media (max-width: 480px) {
+  .write { font-size: 1.45rem; }
+  li, .heading-line { padding-left: 3rem; }
+  li::before { width: 2.1rem; }
+  .heading-line::after, li::after { left: 2.5rem; }
+}
+</style>
+
+<div class="wrap">
+  <section>
+    <h1>Notebook copy sheet</h1>
+    <p class="lede">Copy each entry onto one line of a ruled notebook, in blue ballpoint. Big letters here only so every Telugu mark is clear. Write at your normal size.</p>
+    <ul class="tips">
+      <li>Each entry goes on <b>its own line</b>. Leave a little space between the name, the dash, and the amount.</li>
+      <li>Keep Telugu and English exactly as shown. Don't translate a line.</li>
+      <li>Copy the amounts exactly: <b>116</b> and <b>1116</b> are different, and only page 2 has the comma in <b>1,116</b>.</li>
+      <li>Four entries have no amount (a ring, a silver plate, a saree, a chain). Don't add one.</li>
+      <li>Unsure of a Telugu letter? See the letter guide below the pages.</li>
+    </ul>
+  </section>
+
+  <section class="page" aria-labelledby="p1">
+    <header><span class="label">Page 1</span><h2 id="p1">Padma's wedding, 12 Feb 1994</h2></header>
+    <div class="heading-line">
+      <div class="write"><span class="te">పద్మ పెళ్ళి</span><span class="en">12-2-1994</span></div>
+      <div class="say">Write this at the top of the page. <b>Padma peḷḷi</b> = Padma's wedding</div>
+    </div>
+    <ol>
+      <li><div class="write"><span class="te">ముత్యాలు మామ,</span><span class="te">నల్లగొండ</span><span class="sep">-</span><span class="en">Rs 516/-</span></div>
+          <div class="say"><b>Mutyālu māma, Nallagoṇḍa</b> = Uncle Muthyalu, Nalgonda</div></li>
+      <li><div class="write"><span class="en">K. Ramana Reddy, Miryalaguda</span><span class="sep">-</span><span class="en">116/-</span></div></li>
+      <li><div class="write"><span class="te">పెద్దనాన్న</span><span class="sep">-</span><span class="en">1</span><span class="te">కాసు ఉంగరం</span></div>
+          <div class="say"><b>Peddanānna - 1 kāsu uṅgaraṁ</b> = Father's elder brother, 1-sovereign gold ring</div></li>
+      <li><div class="write"><span class="en">Puram Nagaiah, Bollaram</span><span class="sep">-</span><span class="en">Rs 101/-</span></div></li>
+      <li><div class="write"><span class="en">B. Narsimha, Nalgonda</span><span class="sep">-</span><span class="en">1116/-</span></div></li>
+      <li><div class="write"><span class="te">చామల యాదగిరి</span><span class="sep">-</span><span class="en">51/-</span></div>
+          <div class="say"><b>Chāmala Yādagiri</b> (a name)</div></li>
+      <li><div class="write"><span class="te">బాబాయి</span><span class="sep">-</span><span class="en">Rs 216/-</span></div>
+          <div class="say"><b>Bābāyi</b> = Father's younger brother</div></li>
+      <li><div class="write"><span class="en">Alisha Saheb, Kanagal</span><span class="sep">-</span><span class="en">116/-</span></div></li>
+      <li><div class="write"><span class="te">పిన్ని</span><span class="sep">-</span><span class="te">వెండి పళ్లెం</span></div>
+          <div class="say"><b>Pinni - veṇḍi paḷḷeṁ</b> = Mother's younger sister, silver plate</div></li>
+      <li><div class="write"><span class="en">Muthyalu, Chityal</span><span class="sep">-</span><span class="en">58/-</span></div></li>
+    </ol>
+  </section>
+
+  <section class="page" aria-labelledby="p2">
+    <header><span class="label">Page 2</span><h2 id="p2">Housewarming, 8 Jun 2003</h2></header>
+    <div class="heading-line">
+      <div class="write"><span class="te">గృహప్రవేశం</span><span class="en">8-6-2003</span></div>
+      <div class="say">Write this at the top of the page. <b>Gṛhapravēśaṁ</b> = housewarming</div>
+    </div>
+    <ol>
+      <li><div class="write"><span class="te">భూతం ముత్యాలు</span><span class="sep">-</span><span class="te">విమల</span><span class="sep">-</span><span class="en">Rs 1,116/-</span></div>
+          <div class="say"><b>Bhūtaṁ Mutyālu - Vimala</b> = Butham Muthyalu and Vimala</div></li>
+      <li><div class="write"><span class="en">K.V. Ramana Reddy</span><span class="sep">-</span><span class="en">516/-</span></div></li>
+      <li><div class="write"><span class="te">విమల అత్త</span><span class="sep">-</span><span class="te">పట్టు చీర</span></div>
+          <div class="say"><b>Vimala atta - paṭṭu chīra</b> = Aunt Vimala, silk saree</div></li>
+      <li><div class="write"><span class="en">Puram Nagaiah</span><span class="sep">-</span><span class="en">201/-</span></div></li>
+      <li><div class="write"><span class="te">బాబాయి</span><span class="sep">-</span><span class="en">2</span><span class="te">కాసులు గొలుసు</span></div>
+          <div class="say"><b>Bābāyi - 2 kāsulu golusu</b> = Father's younger brother, 2-sovereign gold chain</div></li>
+      <li><div class="write"><span class="en">Chamala Jyothi</span><span class="sep">-</span><span class="en">116/-</span></div></li>
+      <li><div class="write"><span class="en">Narsimha (Nalgonda)</span><span class="sep">-</span><span class="en">516/-</span></div></li>
+      <li><div class="write"><span class="en">Muthyalu, Chityal</span><span class="sep">-</span><span class="en">101/-</span></div></li>
+    </ol>
+  </section>
+
+  <section aria-labelledby="g">
+    <h2 id="g">Telugu letter guide</h2>
+    <p class="guide-intro">Every Telugu word on the two pages, split into the letters you write one after another. A grey box is one letter with its marks. A box with a letter written under another (like <span style="font-family:var(--te)">త్త</span>) is a joined pair: write the first letter, then the small second letter below it.</p>
+    <div class="words" id="words"></div>
+    <p class="note">పళ్లెం and పెళ్ళి use two different ways of writing the double ḷ. Both are correct; copy each as shown.</p>
+  </section>
+</div>
+
+<script>
+const W = [
+  ["పద్మ", ["ప","ద్మ"], "padma", "Padma (a name)"],
+  ["పెళ్ళి", ["పె","ళ్ళి"], "peḷḷi", "wedding"],
+  ["ముత్యాలు", ["ము","త్యా","లు"], "mutyālu", "Muthyalu (a name)"],
+  ["మామ", ["మా","మ"], "māma", "uncle (mother's brother)"],
+  ["నల్లగొండ", ["న","ల్ల","గొం","డ"], "nallagoṇḍa", "Nalgonda (a town)"],
+  ["పెద్దనాన్న", ["పె","ద్ద","నా","న్న"], "peddanānna", "father's elder brother"],
+  ["కాసు", ["కా","సు"], "kāsu", "sovereign of gold"],
+  ["ఉంగరం", ["ఉం","గ","రం"], "uṅgaraṁ", "ring"],
+  ["చామల", ["చా","మ","ల"], "chāmala", "Chamala (a surname)"],
+  ["యాదగిరి", ["యా","ద","గి","రి"], "yādagiri", "Yadagiri (a name)"],
+  ["బాబాయి", ["బా","బా","యి"], "bābāyi", "father's younger brother"],
+  ["పిన్ని", ["పి","న్ని"], "pinni", "mother's younger sister"],
+  ["వెండి", ["వెం","డి"], "veṇḍi", "silver"],
+  ["పళ్లెం", ["ప","ళ్లెం"], "paḷḷeṁ", "plate"],
+  ["గృహప్రవేశం", ["గృ","హ","ప్ర","వే","శం"], "gṛhapravēśaṁ", "housewarming"],
+  ["భూతం", ["భూ","తం"], "bhūtaṁ", "Butham (a surname)"],
+  ["విమల", ["వి","మ","ల"], "vimala", "Vimala (a name)"],
+  ["అత్త", ["అ","త్త"], "atta", "aunt (uncle's wife)"],
+  ["పట్టు", ["ప","ట్టు"], "paṭṭu", "silk"],
+  ["చీర", ["చీ","ర"], "chīra", "saree"],
+  ["కాసులు", ["కా","సు","లు"], "kāsulu", "sovereigns"],
+  ["గొలుసు", ["గొ","లు","సు"], "golusu", "chain"],
+];
+const box = document.getElementById("words");
+for (const [whole, parts, rom, mean] of W) {
+  const d = document.createElement("div");
+  d.className = "word";
+  const w = document.createElement("div"); w.className = "whole"; w.textContent = whole; w.lang = "te";
+  const p = document.createElement("div"); p.className = "parts"; p.lang = "te";
+  for (const s of parts) { const sp = document.createElement("span"); sp.textContent = s; p.appendChild(sp); }
+  const r = document.createElement("div"); r.className = "rom";
+  r.innerHTML = "<b></b> = "; r.firstChild.textContent = rom; r.appendChild(document.createTextNode(mean));
+  d.append(w, p, r);
+  box.appendChild(d);
+}
+</script>
