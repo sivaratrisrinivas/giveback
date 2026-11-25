@@ -10,6 +10,8 @@ Handoff notes between build sessions. Read this first, then `/mnt/c/Users/Sriniv
 - Giveback never decides the gift amount, and never guesses silently: every answer shows the original handwritten line, and it asks "Is this them?" when unsure.
 - Webhooks, not polling, so the Sprite can sleep.
 - Models: **always `gemini-4-hydrogen`; fall back to `claude-haiku-5-5` only when Gemini fails.** Implemented in `internal/vision`.
+- **Exception approved by the user (2026-11-25): read 2 (the amount check on line crops) uses `claude-haiku-5-5` directly.** Read 1 (the Telugu text) stays hydrogen-first. Reason: no Gemini billing is possible before Nov 30 (AI Studio asks ₹1000 prepayment), so hydrogen's free daily quota (resets 13:30 IST, ~25 page requests) must be saved. Not yet implemented in code.
+- **Free-tier discipline:** no live model calls during development (tests replay saved `read1.json` answers); never read the same photo twice (hash it); live calls only at checkpoints; record the demo just after a 13:30 IST reset.
 - Go, chosen for fast startup.
 - At step 8, or for any hackathon strategy question, check the hackathon-playbook MCP (its `submitting` and `pitching` checklists). Not needed while building steps 2–6.
 - **Sessions are capped at 150k tokens of context.** Near the cap, stop at a clean point, update this file, commit and push, and give the user an exact prompt to continue in a new session.
@@ -31,7 +33,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 | 7 | Buffer (1h). No new features after this point. | — |
 | 8 | Submission (5h): blur/replace private details; 60–90 s video with voiceover + captions (CanVid on Windows), asleep→awake moment at the centre; architecture diagram + 4–6 annotated screenshots; GitHub README with install steps, name every Fly/Sprites technology in "How we built it", our Sprites findings as "what we learned"; submit early (aim Nov 26); post tagging @flydotio | — |
 
-**Billing:** the user is turning on billing for the AI Studio key (~$10, budget alert $10) on the night of Nov 25. Estimated cost: a page $0.03–0.08, a card $0.02–0.04 (unmeasured; step 5 adds logging). Until then Gemini free quota may be exhausted and Haiku (~$4 credit) covers.
+**Billing:** not possible before Nov 30 (AI Studio needs a ₹1000 prepayment). Stay on the Gemini free tier with the discipline in the rules above. Anthropic credit $4.29 is ample: Haiku 5.5 is $0.10/$0.50 per MTok, about $0.003 per page.
 
 ## Infrastructure (as built)
 
@@ -94,5 +96,5 @@ How it works:
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
-2. Page reader built (above). Once billing is on: re-run `readpage` on the Sprite for an all-hydrogen table, and update this file.
+2. Page reader built (above). First: switch read 2 to Haiku (vision needs a way to call Haiku directly), add photo-hash dedupe and replay-from-`read1.json` tests. After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
 3. Build step 2, the thin slice (plan table). Keep matching simple for now (normalised name/surname overlap); the full matcher is step 3.
