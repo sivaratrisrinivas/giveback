@@ -13,8 +13,12 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 BUILD=$(mktemp -d)
 trap 'rm -rf "$BUILD"' EXIT
 
-echo "› building linux/amd64 binary"
-(cd "$ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$BUILD/giveback" .)
+if [[ -n "${GIVEBACK_BIN:-}" ]]; then # already built (scripts/split.sh)
+  cp "$GIVEBACK_BIN" "$BUILD/giveback"
+else
+  echo "› building linux/amd64 binary"
+  (cd "$ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o "$BUILD/giveback" .)
+fi
 
 # The webhook secret proves a request really came from Telegram. Keep one per bot.
 SECRET_FILE="$(dirname "$TOKEN_FILE")/$(basename "$TOKEN_FILE" .token).webhook-secret"

@@ -170,3 +170,40 @@ func TestForgottenPagesMode(t *testing.T) {
 		t.Errorf("mode after expiry: %q", mode)
 	}
 }
+
+// After a household split, /start in both homes says where the notebook came from.
+func TestHouseholdNoteAfterSplit(t *testing.T) {
+	old, err := ledger.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	dir := t.TempDir() + "/ravi"
+	if _, err := old.CopyFor(dir, "Bandaru", "Ravi"); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := ledger.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer copied.Close()
+	for _, c := range []struct {
+		store *ledger.Store
+		want  []string
+	}{
+		{old, []string{"This is the Bandaru household's notebook.", "the Ravi household got its own copy (0 page(s), 0 line(s))"}},
+		{copied, []string{"This is the Ravi household's notebook. It began on", "as a copy of the Bandaru household's notebook (0 page(s), 0 line(s))"}},
+	} {
+		tg := &fakeTG{}
+		b := &Bot{Store: c.store, TG: tg}
+		if err := b.Handle(context.Background(), msg(1, telegram.Message{Text: "/start"})); err != nil {
+			t.Fatal(err)
+		}
+		got := tg.texts[len(tg.texts)-1]
+		for _, w := range c.want {
+			if !strings.Contains(got, w) || !strings.Contains(got, "Namaskaram") {
+				t.Errorf("/start = %q, want it to contain %q", got, w)
+			}
+		}
+	}
+}

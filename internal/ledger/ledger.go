@@ -106,7 +106,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // one writer; the bot handles one message at a time anyway
-	if _, err := db.Exec(schema); err != nil {
+	if _, err := db.Exec(schema + householdSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}

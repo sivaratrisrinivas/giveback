@@ -29,7 +29,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 | 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | ✅ works live (2026-11-26 00:14 IST): `/family`, Yes/No buttons, remembered answers. Relation-word demo waits for a hydrogen re-read of the pages |
 | 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | ✅ works live (2026-11-26 ~00:56 IST): values with source, flagged amount confirmed by typing, gold corrected by weight |
 | 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | ✅ works live (2026-11-26 ~01:30 IST): wake logged, per-call cost logged, `/usage`, graceful restart |
-| 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | — |
+| 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | 🔨 built and tested (2026-11-26 ~03:45 IST); live split waits for the second bot |
 | 7 | Buffer (1h). No new features after this point. | — |
 | 8 | Submission (5h): blur/replace private details; 60–90 s video with voiceover + captions (CanVid on Windows), asleep→awake moment at the centre; architecture diagram + 4–6 annotated screenshots; GitHub README with install steps, name every Fly/Sprites technology in "How we built it", our Sprites findings as "what we learned"; submit early (aim Nov 26); post tagging @flydotio | — |
 
@@ -174,6 +174,15 @@ How it works:
 - Deploy restart: `shutting down: finishing requests in progress` → `stopped` (graceful).
 - Hydrogen: 503 at 01:05, 01:18 and 01:30 IST, and **429 "You exceeded your current quota" at 01:27 IST**, though almost every call tonight failed (503 tries may count against the free quota). So wait for the 13:30 IST reset before re-reading pages.
 
+## Step 6: household split (as built, 2026-11-26)
+
+- `ledger.CopyFor(dir, from, newName)` (`internal/ledger/household.go`): copies the database with SQLite `VACUUM INTO`, a consistent snapshot that's safe while the bot runs, then copies `crops/` and `cache/`. In the copy it clears `updates` (**Telegram update IDs are per bot: an old ID would make the new bot silently drop a new message**), `chats`, `asks`, `calls` and `copies`, and writes a `household` row (name, copied from, when, pages and lines carried). The old ledger gets its name, if it had none, and a `copies` row. Kept: pages, lines, crops, the family tree, Yes/No answers, confirmed amounts, and the model cache (the same photo is never read twice in either home).
+- `giveback copy-for <out-dir> <this household> <new household>` runs it (main.go).
+- `/start` and `/help` begin with "📒 This is the Ravi household's notebook. It began on 26 Nov 2026 as a copy of the Bandaru household's notebook (2 page(s), 18 line(s)); since then each household keeps its own." The old one says "• On … the Ravi household got its own copy (…)".
+- `scripts/split.sh <from-sprite> <from-household> <new-household> <new-bot-token-file>`: builds (not timed), then times each phase: 1) `sprite create --skip-console giveback-<name>` + public URL, 2) push the binary to the old Sprite's /tmp, run copy-for, tar it, 3) pull, push and unpack it into the new Sprite's `~/giveback/data`, 4) `deploy.sh` (binary, service, webhook; `GIVEBACK_BIN` skips the second build), 5) wait for `GET /`. The connectors are granted to the `giveback-` prefix, so the new Sprite reaches them with no extra step (to be confirmed live).
+- Tests (no model calls): `TestCopyForNewHousehold` (what is and isn't carried, update 7 is new in the copy, the two diverge, errors for an existing dir or same name) and `TestHouseholdNoteAfterSplit`.
+- Dry run on a local pull of the live ledger: `copied 2 page(s), 18 line(s) … in 9ms`, 236 KB. Pulling the live data dir took 24 s (the Sprite woke).
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
@@ -184,5 +193,5 @@ How it works:
 6. Step 5 works live (sections above). `/usage` shows model costs and the Sprite's sleeps; `GET /` shows the wake status.
 7. **Next session, in order:**
    a. **After 13:30 IST (quota reset)**, one tiny hydrogen call from the Sprite (`sprite exec -s giveback-bandaru --no-stdin -- sh -c 'curl -s -m 40 -o /dev/null -w "%{http_code}\n" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"Say ok\"}]}]}" https://api.sprites.dev/v1/gateway/gemini/_etoR37tem2Nad0NLj32jQ/v1beta/models/gemini-4-hydrogen:generateContent'`). If 200: user sends `/pages`, page1 (as File), check the log says `read 1 gemini-4-hydrogen` (or `model call: gemini-4-hydrogen ok`), then page2, then `/done`. A new photo of a Haiku-read page now replaces it too (same-page dedupe). Then "Bandaru Ramulu", then forward the jayaprakash card. Also run `readpage` once on the three photos for the final step 1 table if quota allows (it costs ~4–6 hydrogen calls; the pages come first).
-   b. Step 6: household split (new Sprite `giveback-<name>`, copy data, second bot via @BotFather: needs the user, timed).
+   b. Step 6 is built (section above). Live: the user makes the second bot with @BotFather and saves the token to `~/.config/giveback/bot2.token` (mode 600); deploy the old Sprite first is not needed (split.sh pushes its own copy binary). Then `scripts/split.sh giveback-bandaru Bandaru <Name> ~/.config/giveback/bot2.token`, record the timings here, `/start` in both bots, and check the new bot answers a typed name (no model call). Best done **after** 7a so the copy carries the hydrogen readings.
    When `TodayMonth` gets old, take the newest month from https://labourbureau.gov.in/CPI.

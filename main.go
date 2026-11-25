@@ -32,6 +32,10 @@ func main() {
 	home, _ := os.UserHomeDir()
 	cfgDir := envOr("GIVEBACK_CONFIG", filepath.Join(home, ".config", "giveback"))
 	dataDir := envOr("GIVEBACK_DATA", filepath.Join(home, "giveback", "data"))
+	if len(os.Args) > 1 && os.Args[1] == "copy-for" {
+		copyFor(dataDir, os.Args[2:])
+		return
+	}
 	token := mustRead(filepath.Join(cfgDir, "bot.token"))
 	secret := mustRead(filepath.Join(cfgDir, "webhook.secret"))
 
@@ -126,6 +130,27 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Printf("stopped")
+}
+
+// copyFor writes a copy of the notebook for a new household (see
+// ledger.CopyFor). scripts/split.sh runs it on the old household's Sprite
+// while the bot keeps running.
+func copyFor(dataDir string, args []string) {
+	if len(args) != 3 {
+		log.Fatal("usage: giveback copy-for <out-dir> <this household's name> <new household's name>")
+	}
+	store, err := ledger.Open(dataDir)
+	if err != nil {
+		log.Fatalf("open ledger: %v", err)
+	}
+	defer store.Close()
+	start := time.Now()
+	c, err := store.CopyFor(args[0], args[1], args[2])
+	if err != nil {
+		log.Fatalf("copy: %v", err)
+	}
+	fmt.Printf("copied %d page(s), %d line(s) for the %s household into %s in %s\n",
+		c.Pages, c.Lines, c.Name, args[0], time.Since(start).Round(time.Millisecond))
 }
 
 func mustRead(path string) string {

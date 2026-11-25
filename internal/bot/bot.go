@@ -129,7 +129,7 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 
 	switch {
 	case cmd == "/start" || cmd == "/help":
-		return b.say(ctx, chat, help)
+		return b.help(ctx, chat)
 	case cmd == "/pages":
 		if err := b.Store.SetMode(chat, modePages); err != nil {
 			return err
@@ -190,8 +190,41 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 		}
 		return b.lookup(ctx, chat, []match.Person{{Names: []string{text}}}, nil)
 	}
+	return b.help(ctx, chat)
+}
+
+// help explains the bot, starting with whose notebook this is when it has
+// been split between households.
+func (b *Bot) help(ctx context.Context, chat int64) error {
+	h, err := b.Store.Household()
+	if err != nil {
+		return err
+	}
+	if note := householdNote(h); note != "" {
+		return b.say(ctx, chat, note+"\n\n"+help)
+	}
 	return b.say(ctx, chat, help)
 }
+
+// householdNote says where this notebook came from and who got copies of it,
+// or "" for a notebook that was never split.
+func householdNote(h ledger.Household) string {
+	var sb strings.Builder
+	if h.CopiedFrom != "" {
+		fmt.Fprintf(&sb, "📒 This is the %s household's notebook. It began on %s as a copy of the %s household's notebook (%d page(s), %d line(s)); since then each household keeps its own.",
+			h.Name, h.CopiedAt.In(ist).Format("2 Jan 2006"), h.CopiedFrom, h.Pages, h.Lines)
+	}
+	for _, c := range h.Copies {
+		if sb.Len() == 0 {
+			fmt.Fprintf(&sb, "📒 This is the %s household's notebook.", h.Name)
+		}
+		fmt.Fprintf(&sb, "\n• On %s the %s household got its own copy (%d page(s), %d line(s)).", c.At.In(ist).Format("2 Jan 2006"), c.Name, c.Pages, c.Lines)
+	}
+	return sb.String()
+}
+
+// ist is the family's time zone, for dates in replies.
+var ist = time.FixedZone("IST", 5*3600+1800)
 
 func (b *Bot) addPage(ctx context.Context, chat int64, data []byte) error {
 	hash := vision.Hash(data)
