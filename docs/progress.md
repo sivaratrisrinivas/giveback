@@ -15,17 +15,21 @@ Handoff notes between build sessions. Read this first, then `/mnt/c/Users/Sriniv
 
 ## Plan (24h of work) and status
 
+Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-end flow working in Telegram first, so we can demo at every checkpoint ("Can we demo right now?"), then deepen it. Nothing was added or dropped; steps 3–6 just come after the slice.
+
 | # | Step | Status |
 |---|---|---|
 | 0 | Sprite, connectors, public URL, Telegram webhook, sleep/wake | ✅ done |
-| 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, match a real card | ✅ card + notebook pages (hydrogen re-run of the turned photo pending, see below) |
-| 2 | Ledger (SQLite), add pages by photo in Telegram, confirm flagged amounts | — |
-| 3 | Telugu relation words, family tree, "Is this them?" buttons, remember answers | — |
-| 4 | Reply: cropped line, amount, year, function, "about ₹X today" (CPI-IW with linking factors, cited); gold by weight only | — |
-| 5 | Sleep/wake hardening, dedupe, wake-time logging | — |
+| 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, read a real card | ✅ (all-hydrogen re-run pending billing) |
+| 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | — next |
+| 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | — |
+| 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | — |
+| 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
 | 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | — |
-| 7 | Buffer (1h) | — |
-| 8 | Blur/replace private details, 60–90 s video, README, submit, post tagging @flydotio (5h) | — |
+| 7 | Buffer (1h). No new features after this point. | — |
+| 8 | Submission (5h): blur/replace private details; 60–90 s video with voiceover + captions (CanVid on Windows), asleep→awake moment at the centre; architecture diagram + 4–6 annotated screenshots; GitHub README with install steps, name every Fly/Sprites technology in "How we built it", our Sprites findings as "what we learned"; submit early (aim Nov 26); post tagging @flydotio | — |
+
+**Billing:** the user is turning on billing for the AI Studio key (~$10, budget alert $10) on the night of Nov 25. Estimated cost: a page $0.03–0.08, a card $0.02–0.04 (unmeasured; step 5 adds logging). Until then Gemini free quota may be exhausted and Haiku (~$4 credit) covers.
 
 ## Infrastructure (as built)
 
@@ -88,5 +92,5 @@ How it works:
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
-2. Page reader built (above). First: re-run `readpage` on the Sprite once the Gemini quota resets, to get an all-hydrogen table, and update this file.
-3. Matching card hosts to ledger lines: transliteration-aware fuzzy match (Telugu script and English), surname-first order, initials ("B." → Butham), relation words (మామ → mother's brother) resolved through the family tree; rank, then ask "Is this them?".
+2. Page reader built (above). Once billing is on: re-run `readpage` on the Sprite for an all-hydrogen table, and update this file.
+3. Build step 2, the thin slice (plan table). Keep matching simple for now (normalised name/surname overlap); the full matcher is step 3.
