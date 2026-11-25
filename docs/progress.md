@@ -10,7 +10,7 @@ Handoff notes between build sessions. Read this first, then `/mnt/c/Users/Sriniv
 - Giveback never decides the gift amount, and never guesses silently: every answer shows the original handwritten line, and it asks "Is this them?" when unsure.
 - Webhooks, not polling, so the Sprite can sleep.
 - Models: **always `gemini-4-hydrogen`; fall back to `claude-haiku-5-5` only when Gemini fails.** Implemented in `internal/vision`.
-- **Exception approved by the user (2026-11-25): read 2 (the amount check on line crops) uses `claude-haiku-5-5` directly.** Read 1 (the Telugu text) stays hydrogen-first. Reason: no Gemini billing is possible before Nov 30 (AI Studio asks ₹1000 prepayment), so hydrogen's free daily quota (resets 13:30 IST, ~25 page requests) must be saved. Not yet implemented in code.
+- **Exception approved by the user (2026-11-25): read 2 (the amount check on line crops) uses `claude-haiku-5-5` directly.** Read 1 (the Telugu text) stays hydrogen-first. Reason: no Gemini billing is possible before Nov 30 (AI Studio asks ₹1000 prepayment), so hydrogen's free daily quota (resets 13:30 IST, ~25 page requests) must be saved. Implemented: `notebook.Models{Page: reader, Amounts: reader.Haiku()}`.
 - **Free-tier discipline:** no live model calls during development (tests replay saved `read1.json` answers); never read the same photo twice (hash it); live calls only at checkpoints; record the demo just after a 13:30 IST reset.
 - Go, chosen for fast startup.
 - At step 8, or for any hackathon strategy question, check the hackathon-playbook MCP (its `submitting` and `pitching` checklists). Not needed while building steps 2–6.
@@ -96,5 +96,5 @@ How it works:
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
-2. Page reader built (above). First: switch read 2 to Haiku (vision needs a way to call Haiku directly), add photo-hash dedupe and replay-from-`read1.json` tests. After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
+2. Page reader built (above). Follow-ups done 2026-11-25: read 2 calls Haiku directly (`vision.Reader.Haiku()`); `vision.Cached` keeps every model answer on disk keyed by a hash of route + prompt + image bytes, so the same photo never reaches a model twice (`readpage` caches under `crops/cache/`); tests replay `testdata/replay/*.read1.json` (saved from run 4, Haiku read 1) through the real crop + flag pipeline with no model calls (skipped if the photos are absent). After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
 3. Build step 2, the thin slice (plan table). Keep matching simple for now (normalised name/surname overlap); the full matcher is step 3.

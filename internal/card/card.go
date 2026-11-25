@@ -89,7 +89,7 @@ var schema = map[string]any{
 }
 
 // Read extracts the invitation from one or more card images (front, back, inside).
-func Read(ctx context.Context, r *vision.Reader, imgs ...vision.Image) (Invitation, vision.Result, error) {
+func Read(ctx context.Context, r vision.Asker, imgs ...vision.Image) (Invitation, vision.Result, error) {
 	res, err := r.ReadJSON(ctx, prompt, schema, imgs...)
 	if err != nil {
 		return Invitation{}, res, err

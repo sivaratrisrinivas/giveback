@@ -56,7 +56,7 @@ type Page struct {
 	SecondRead vision.Result `json:"-"`
 }
 
-func readPage(ctx context.Context, r *vision.Reader, photo vision.Image) (Page, error) {
+func readPage(ctx context.Context, r vision.Asker, photo vision.Image) (Page, error) {
 	res, err := r.ReadJSON(ctx, pagePrompt, pageSchema, photo)
 	if err != nil {
 		return Page{}, err
@@ -167,9 +167,18 @@ var amountSchema = map[string]any{
 	"required": []string{"lines"},
 }
 
+// Models says who answers each read. In production Page is the hydrogen-first
+// Reader and Amounts is Reader.Haiku() (approved 2026-11-25 to save Gemini's
+// free quota); tests replay saved answers instead.
+type Models struct {
+	Page    vision.Asker // read 1: the whole page
+	Amounts vision.Asker // read 2: the amounts on the line crops
+}
+
 // Read reads one page photo: lines with boxes, a crop of each line, and a
 // second, independent read of every amount. Lines needing a person's eye are flagged.
-func Read(ctx context.Context, r *vision.Reader, photo vision.Image) (Page, error) {
+func Read(ctx context.Context, m Models, photo vision.Image) (Page, error) {
+	r := m.Page
 	img, _, err := image.Decode(bytes.NewReader(photo.Data))
 	if err != nil {
 		return Page{}, fmt.Errorf("decode photo: %w", err)
@@ -233,7 +242,7 @@ func Read(ctx context.Context, r *vision.Reader, photo vision.Image) (Page, erro
 		return p, nil
 	}
 
-	res2, err := r.ReadJSON(ctx, amountPrompt, amountSchema, crops...)
+	res2, err := m.Amounts.ReadJSON(ctx, amountPrompt, amountSchema, crops...)
 	if err != nil {
 		for i := range p.Lines {
 			p.Lines[i].Flags = append(p.Lines[i].Flags, "second read failed: amount checked only once")

@@ -46,6 +46,12 @@ func main() {
 		os.Setenv("GIVEBACK_GEMINI_BASE", "http://127.0.0.1:1") // unreachable on purpose
 	}
 	r := vision.New()
+	// Answers are cached by photo hash: re-running on the same photos makes no model calls.
+	cacheDir := filepath.Join(*outDir, "cache")
+	models := notebook.Models{
+		Page:    vision.Cached(r, cacheDir, "hydrogen-first"),
+		Amounts: vision.Cached(r.Haiku(), cacheDir, "haiku"),
+	}
 
 	type row struct {
 		name  string
@@ -65,7 +71,7 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		p, err := notebook.Read(context.Background(), r, vision.Image{MIME: http.DetectContentType(b), Data: b})
+		p, err := notebook.Read(context.Background(), models, vision.Image{MIME: http.DetectContentType(b), Data: b})
 		if err != nil {
 			log.Fatalf("%s: %v", path, err)
 		}
@@ -97,6 +103,9 @@ func printDetail(name string, p notebook.Page, s notebook.PageScore) {
 	}
 	if p.FirstRead.PrimaryErr != nil {
 		fmt.Printf("read 1: gemini skipped: %v\n", p.FirstRead.PrimaryErr)
+	}
+	if p.FirstRead.Cached {
+		fmt.Println("read 1: replayed from cache (no model call)")
 	}
 	if p.SecondRead.PrimaryErr != nil {
 		fmt.Printf("read 2: gemini skipped: %v\n", p.SecondRead.PrimaryErr)

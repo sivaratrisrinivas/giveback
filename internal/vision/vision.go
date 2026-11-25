@@ -1,9 +1,12 @@
 // Package vision sends images to a model and gets JSON back.
 //
-// It always asks Gemini (gemini-4-hydrogen) first and falls back to Claude
-// (claude-haiku-5-5) only when Gemini fails: busy, rate-limited, timed out, or
-// returned something that is not JSON. Both go through the Sprites connector
-// gateway, so no API key ever lives in this program or on the Sprite.
+// Reader.ReadJSON always asks Gemini (gemini-4-hydrogen) first and falls back
+// to Claude (claude-haiku-5-5) only when Gemini fails: busy, rate-limited,
+// timed out, or returned something that is not JSON. Reader.Haiku() asks
+// Claude directly; it is used only for the amount check (read 2), an exception
+// the user approved to save Gemini's small free daily quota. Both go through
+// the Sprites connector gateway, so no API key ever lives in this program or on
+// the Sprite.
 package vision
 
 import (
@@ -45,6 +48,13 @@ type Result struct {
 	Model      string        // which model produced JSON
 	Elapsed    time.Duration // total time, including a failed primary attempt
 	PrimaryErr error         // why Gemini was skipped, if it was
+	Cached     bool          // answered from the disk cache, no model call made
+}
+
+// Asker answers a prompt about images with JSON. *Reader, Reader.Haiku(),
+// Cached and test fakes all satisfy it.
+type Asker interface {
+	ReadJSON(ctx context.Context, prompt string, schema map[string]any, imgs ...Image) (Result, error)
 }
 
 type Reader struct {
@@ -99,6 +109,20 @@ func (r *Reader) ReadJSON(ctx context.Context, prompt string, schema map[string]
 		return Result{}, fmt.Errorf("both models failed: %s: %v; %s: %w", PrimaryModel, primaryErr, FallbackModel, err)
 	}
 	return Result{JSON: out, Model: FallbackModel, Elapsed: time.Since(start), PrimaryErr: primaryErr}, nil
+}
+
+// Haiku returns an Asker that goes straight to Claude, skipping Gemini.
+func (r *Reader) Haiku() Asker { return haikuOnly{r} }
+
+type haikuOnly struct{ r *Reader }
+
+func (h haikuOnly) ReadJSON(ctx context.Context, prompt string, _ map[string]any, imgs ...Image) (Result, error) {
+	start := time.Now()
+	out, err := h.r.haiku(ctx, prompt, imgs)
+	if err != nil {
+		return Result{}, fmt.Errorf("%s: %w", FallbackModel, err)
+	}
+	return Result{JSON: out, Model: FallbackModel, Elapsed: time.Since(start)}, nil
 }
 
 func (r *Reader) gemini(ctx context.Context, prompt string, schema map[string]any, imgs []Image) (json.RawMessage, error) {
