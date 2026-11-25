@@ -493,6 +493,11 @@ func TestConfirmFlaggedAmount(t *testing.T) {
 	if !strings.Contains(last(), "type what it says") {
 		t.Errorf("fix prompt %q", last())
 	}
+	n := len(tg.texts)
+	tap(55, bs[len(bs)-1].Data) // a second tap doesn't ask again
+	if len(tg.texts) != n {
+		t.Errorf("second tap re-asked: %q", last())
+	}
 	send(msg(6, telegram.Message{Text: "one"}))
 	if !strings.Contains(last(), "didn't understand") {
 		t.Errorf("bad input reply %q", last())

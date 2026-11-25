@@ -697,10 +697,17 @@ func (b *Bot) confirmTap(ctx context.Context, q *telegram.CallbackQuery, chat, m
 		return b.TG.AnswerCallback(ctx, q.ID, "That line is out of date (the page was read again).")
 	}
 	if parts[1] == "x" {
+		mode, err := b.Store.Mode(chat)
+		if err != nil {
+			return err
+		}
+		if mode == modeFix+parts[0] { // tapped again: the question is already above
+			return b.TG.AnswerCallback(ctx, q.ID, "Type it in the message box")
+		}
 		if err := b.Store.SetMode(chat, modeFix+parts[0]); err != nil {
 			return err
 		}
-		b.TG.AnswerCallback(ctx, q.ID, "")
+		b.TG.AnswerCallback(ctx, q.ID, "Type it in the message box")
 		return b.say(ctx, chat, fmt.Sprintf("Please look at the handwriting of “%s” and type what it says: the rupees in digits (like 1116), or gold like “2 sovereigns”. Type 0 if no cash is written, or “cancel”.", e.Text))
 	}
 	if len(parts) != 3 {

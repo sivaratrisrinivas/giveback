@@ -27,7 +27,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 | 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, read a real card | ✅ (all-hydrogen re-run pending billing) |
 | 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | ✅ works live (2026-11-25, read by the Haiku fallback: hydrogen was 503) |
 | 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | ✅ works live (2026-11-26 00:14 IST): `/family`, Yes/No buttons, remembered answers. Relation-word demo waits for a hydrogen re-read of the pages |
-| 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | 🟡 built, tested offline, deployed (5a2fe95); live checkpoint pending |
+| 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | ✅ works live (2026-11-26 ~00:56 IST): values with source, flagged amount confirmed by typing, gold corrected by weight |
 | 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
 | 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | — |
 | 7 | Buffer (1h). No new features after this point. | — |
@@ -147,6 +147,12 @@ How it works:
 - Flagged lines get **no** today's value ("I'll work it out once you confirm the amount"), and buttons on their own row: one per reading (read 1, and read 2 when they disagree, e.g. "✅ ₹1,116" / "✅ ₹116"), plus "✏️ Something else", which asks the family to type it ("1116", "Rs 1,116/-", "2 sovereigns", "1 kasu", "0", "cancel"). Confirming stores the gift, clears the flags (`lines.checked = 1`), and replies with today's value. Later replies say "(you checked this)". Callback data `c:<line>:<digits>:<gold>` or `c:<line>:x`; typing mode is chat mode `fix:<line>`.
 - `internal/ledger`: new columns `second_digits`, `second_gold`, `checked`, added to old ledgers on open (tested). Lines read before this have no second reading stored, so they offer only read 1 + "Something else". Re-reading a page drops its confirmations, like answers.
 - `internal/telegram`: `telegram.NewRow` between buttons starts a new row.
+- **Live checkpoint, 2026-11-26 00:29–00:57 IST** (on the Haiku-read ledger, no model calls):
+  - "Ramana Reddy": ₹116 (12-2-1994) → about ₹930 (8.0×), ₹516 (8-6-2003) → about ₹2,100 (4.1×), each with its source line.
+  - "Butham Narsimha": the flagged 1,116/116 line showed no value and the buttons "✅ ₹1,116 / ✏️ Something else" under the Yes/No row; typed 1116 → "gave ₹1,116 … about ₹8,900".
+  - "బావబావు" (Haiku's misreading of బాబాయి, with 2 కాసులు read as 25): "25 sovereigns of gold (200 g)", no rupees; "Something else" + "2 sovereigns" → corrected to 16 g.
+  - Fixed after: a second tap on "Something else" repeated the prompt (the button stays visible). It now just shows "Type it in the message box".
+  - Side note (step 3 matcher, not changed): typing only "Ramana Reddy" gives "Is this them?" because the line's initial K. is not in what was typed; a card with the full name matches strongly.
 - Tests (no model calls): `internal/worth` (each base, year-only, no-guess cases, cite text), `TestTodayValueInCaption`, `TestConfirmFlaggedAmount` (tap a reading, then "Something else" + typed gold), `TestParseGift`, `TestMigrateOldLedger`.
 
 ## Next session: start here
@@ -155,4 +161,5 @@ How it works:
 2. Page reader built (above). Follow-ups done 2026-11-25: read 2 calls Haiku directly (`vision.Reader.Haiku()`); `vision.Cached` keeps every model answer on disk keyed by a hash of route + prompt + image bytes, so the same photo never reaches a model twice (`readpage` caches under `crops/cache/`); tests replay `testdata/replay/*.read1.json` (saved from run 4, Haiku read 1) through the real crop + flag pipeline with no model calls (skipped if the photos are absent). After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
 3. Step 2 done (section above). When hydrogen is not 503 (try one tiny call first), re-send page1 and page2 to the bot in `/pages` mode to replace the Haiku readings, then forward the card again. Log: `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`.
 4. Step 3 works live (section above). **Still to show, once hydrogen is up:** deploy (`scripts/deploy.sh giveback-bandaru ~/.config/giveback/bot1.token`). If hydrogen is up (one tiny call first), re-send page1 + page2 in `/pages` mode. The family tree is already set. Type "Bandaru Ramulu" (expect "Is this Bandaru Ramulu? The line says బాబాయి …" with buttons), forward the jayaprakash card, tap Yes/No, and forward it again to see the answers remembered.
-5. Step 4 built and deployed (section above). Hydrogen was still 503 at 00:17 IST on Nov 26. Live checkpoint for step 4: type "Ramana Reddy" (values + source), "Butham Narsimha" (flagged 1116/116 → tap a reading), a gold line (బాబాయి/peddananna) → weight only.
+5. Step 4 works live (section above). Hydrogen was still 503 at 00:17 IST on Nov 26. Re-reading the pages with hydrogen drops the live confirmations (line IDs change), which is fine.
+6. Next: step 5 (sleep/wake hardening, dedupe, wake-time logging, per-request token/cost logging). When `TodayMonth` gets old, take the newest month from https://labourbureau.gov.in/CPI.
