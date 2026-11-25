@@ -50,6 +50,7 @@ type replay struct {
 	byPhoto map[string]string // photo hash -> saved read-1 JSON
 	last    []json.RawMessage
 	calls   int
+	model   string // who read 1 claims to be; "" means "replay"
 }
 
 func (r *replay) page() vision.Asker    { return askFunc(r.read1) }
@@ -66,6 +67,9 @@ func (r *replay) read1(_ context.Context, _ string, _ map[string]any, imgs ...vi
 	}
 	json.Unmarshal([]byte(a), &p)
 	r.last = p.Lines
+	if r.model == vision.FallbackModel {
+		return vision.Result{JSON: json.RawMessage(a), Model: r.model, PrimaryErr: errors.New("gemini HTTP 503")}, nil
+	}
 	return vision.Result{JSON: json.RawMessage(a), Model: "replay"}, nil
 }
 
@@ -224,5 +228,42 @@ func TestGift(t *testing.T) {
 		if got := Gift(c.e); got != c.want {
 			t.Errorf("Gift(%+v) = %q, want %q", c.e, got, c.want)
 		}
+	}
+}
+
+// A page first read by the fallback model is read again when its photo is
+// sent again, and replaces the old reading instead of adding to it.
+func TestFallbackPageIsReread(t *testing.T) {
+	photo, err := os.ReadFile("../../testdata/notebook/page2.jpeg")
+	if err != nil {
+		t.Skipf("photo not present (kept out of git): %v", err)
+	}
+	saved, err := os.ReadFile("../../testdata/replay/page2.read1.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := &replay{byPhoto: map[string]string{vision.Hash(photo): string(saved)}, model: vision.FallbackModel}
+	tg := &fakeTG{files: map[string][]byte{"p": photo}}
+	store, err := ledger.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := &Bot{Store: store, TG: tg, Pages: notebook.Models{Page: rp.page(), Amounts: rp.amounts()}}
+	ctx := context.Background()
+	b.Handle(ctx, msg(1, telegram.Message{Text: "/pages"}))
+	b.Handle(ctx, msg(2, photoMsg("p")))
+	rp.model = "" // the primary model is back
+	b.Handle(ctx, msg(3, photoMsg("p")))
+	if rp.calls != 4 {
+		t.Errorf("model calls %d, want 4 (read twice)", rp.calls)
+	}
+	b.Handle(ctx, msg(4, photoMsg("p")))
+	if rp.calls != 4 {
+		t.Errorf("a primary-model page was read again: %d calls", rp.calls)
+	}
+	es, _ := store.Entries()
+	if len(es) != 8 {
+		t.Errorf("%d lines in the ledger, want 8 (old reading replaced)", len(es))
 	}
 }

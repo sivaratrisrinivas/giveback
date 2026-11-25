@@ -83,6 +83,7 @@ func (s *Store) Dir() string { return s.dir }
 // PageInfo describes a stored page.
 type PageInfo struct {
 	ID       int64
+	Model    string // who did read 1
 	Function string
 	Date     string
 	Lines    int
@@ -92,7 +93,7 @@ type PageInfo struct {
 // PageByHash finds a page already read from this photo.
 func (s *Store) PageByHash(hash string) (PageInfo, bool, error) {
 	var p PageInfo
-	err := s.db.QueryRow(`SELECT id, function, date FROM pages WHERE photo_hash = ?`, hash).Scan(&p.ID, &p.Function, &p.Date)
+	err := s.db.QueryRow(`SELECT id, function, date, model1 FROM pages WHERE photo_hash = ?`, hash).Scan(&p.ID, &p.Function, &p.Date, &p.Model)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PageInfo{}, false, nil
 	}
@@ -152,6 +153,26 @@ func (s *Store) AddPage(hash string, p notebook.Page) (PageInfo, error) {
 		}
 	}
 	return info, tx.Commit()
+}
+
+// DeletePage removes a page, its lines and their pictures, so the photo can
+// be read again (e.g. it was read by the fallback model).
+func (s *Store) DeletePage(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM lines WHERE page_id = ?`, id); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM pages WHERE id = ?`, id); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(s.dir, "crops", fmt.Sprint(id)))
 }
 
 // Entry is one notebook line with the page it came from.

@@ -116,22 +116,38 @@ func (b *Bot) Handle(ctx context.Context, u telegram.Update) error {
 
 func (b *Bot) addPage(ctx context.Context, chat int64, data []byte) error {
 	hash := vision.Hash(data)
+	var reread int64
 	if p, ok, err := b.Store.PageByHash(hash); err != nil {
 		return err
-	} else if ok {
+	} else if ok && p.Model != vision.FallbackModel {
 		return b.say(ctx, chat, fmt.Sprintf("I already have this page: %s, %s (%d lines). Nothing to do.", p.Function, p.Date, p.Lines))
+	} else if ok {
+		// Read 1 was done by the fallback model, which reads Telugu far worse.
+		// Sending the photo again asks for a better reading; if the primary
+		// model is still down, this costs one Haiku call and changes little.
+		log.Printf("chat %d: page %d was read by %s; reading it again", chat, p.ID, p.Model)
+		b.say(ctx, chat, fmt.Sprintf("I have this page (%s, %s), but it was read by my backup reader. Reading it again…", p.Function, p.Date))
+		reread = p.ID
 	}
 	img, err := forModel(data)
 	if err != nil {
 		return b.say(ctx, chat, "That doesn't look like a photo I can read. Please send a JPEG or PNG.")
 	}
-	b.say(ctx, chat, "Reading the page… this takes about a minute.")
+	if reread == 0 {
+		b.say(ctx, chat, "Reading the page… this takes about a minute.")
+	}
 	b.TG.SendChatAction(ctx, chat, "typing")
 
 	p, err := notebook.Read(ctx, b.Pages, img)
 	if err != nil {
 		log.Printf("chat %d: read page: %v", chat, err)
 		return b.say(ctx, chat, "Sorry, I couldn't read that page just now. Please try again in a little while.")
+	}
+	logSkipped(chat, "page read 1", p.FirstRead)
+	if reread != 0 {
+		if err := b.Store.DeletePage(reread); err != nil {
+			return err
+		}
 	}
 	info, err := b.Store.AddPage(hash, p)
 	if err != nil {
@@ -163,6 +179,7 @@ func (b *Bot) answerCard(ctx context.Context, chat int64, data []byte) error {
 		log.Printf("chat %d: read card: %v", chat, err)
 		return b.say(ctx, chat, "Sorry, I couldn't read that card just now. Please try again in a little while.")
 	}
+	logSkipped(chat, "card", res)
 	log.Printf("chat %d: card read by %s in %.1fs (cached %v)", chat, res.Model, res.Elapsed.Seconds(), res.Cached)
 
 	people := inv.Hosts()
@@ -327,6 +344,13 @@ func forModel(data []byte) (vision.Image, error) {
 		return vision.Image{}, err
 	}
 	return vision.Image{MIME: "image/jpeg", Data: jpg}, nil
+}
+
+// logSkipped records why the primary model was not used, if it wasn't.
+func logSkipped(chat int64, what string, r vision.Result) {
+	if r.PrimaryErr != nil {
+		log.Printf("chat %d: %s: %s skipped: %v", chat, what, vision.PrimaryModel, r.PrimaryErr)
+	}
 }
 
 func orUnknown(s string) string {

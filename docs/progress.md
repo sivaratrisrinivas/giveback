@@ -25,7 +25,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 |---|---|---|
 | 0 | Sprite, connectors, public URL, Telegram webhook, sleep/wake | ✅ done |
 | 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, read a real card | ✅ (all-hydrogen re-run pending billing) |
-| 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | 🟡 built, tests pass, deployed; live checkpoint pending |
+| 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | ✅ works live (2026-11-25, read by the Haiku fallback: hydrogen was 503) |
 | 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | — |
 | 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | — |
 | 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
@@ -100,11 +100,17 @@ How it works:
 - `internal/bot`: `/pages` → each photo is a page (or a caption containing "page"); `/done` ends it. Any other photo is an invitation card: hosts are read (`internal/card`), matched, and each hit is sent as the cropped handwritten line with function, date, line number, the line as read, the gift (₹ with Indian grouping, gold in sovereigns, items), and "⚠️ Please check the handwriting: …" for flagged lines. Plain text is a name lookup (no model call). Photos over 2000 px are shrunk first.
 - `main.go`: all model calls go through `vision.Cached` under `data/cache/`. Work runs inside the webhook request (keeps the Sprite awake) with its own 4-minute context, so it finishes even if Telegram gives up waiting and re-delivers.
 - Tests (`go test ./...`, no model calls): `internal/bot` TestThinSlice adds page1 + page2 from saved answers, checks a repeat photo and a re-delivered update cost 0 model calls, forwards a faked card for Kothapalli Venkata Ramana Reddy and gets both of his lines back as pictures.
-- **Not yet seen live:** Telegram's webhook timeout on a ~40–60 s page read (if it re-delivers, the ledger drops the repeat; watch the log), and how well hydrogen reads Telegram-compressed photos (≤1280 px unless sent as a File).
+- A page first read by the Haiku fallback is read again when its photo is sent again, replacing the old reading. Fallback answers are not cached, so hydrogen gets another chance. The log now says why Gemini was skipped.
+
+**Live checkpoint, 2026-11-25 ~23:00 IST** (`/pages`, page1 + page2 as Files, `/done`, the jayaprakash card, "Ramana Reddy"):
+- The whole flow worked in Telegram. Pages took ~25 s each (read 1 ~16 s + read 2 5–7 s), the card 27 s, a typed lookup 1.8 s.
+- **Telegram delivers webhook updates one at a time, in order:** page 2 arrived only after page 1's reply (delivery lag 25 s, then 36 s). Nothing was re-delivered, and there was no timeout at 25 s.
+- **Every read fell back to Haiku:** hydrogen answered 503 "high demand" (checked with one tiny call), not 429 quota. So the Telugu was Haiku-quality: page 2 line 1 read as "ఖూహం ముఖ్యులు - విమల", so the card's Butham Muthyalu was matched only on "విమల" (weak, asked about). The Chityal Muthyalu lines were correctly shown as "Is this them?", and "Ramana Reddy" found both of his lines as strong matches. Flags showed as intended (B. Narsimha 1116 vs 116).
+- The ledger on the Sprite still holds these Haiku readings (18 lines). Re-sending page1/page2 when hydrogen is up replaces them.
 
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
 2. Page reader built (above). Follow-ups done 2026-11-25: read 2 calls Haiku directly (`vision.Reader.Haiku()`); `vision.Cached` keeps every model answer on disk keyed by a hash of route + prompt + image bytes, so the same photo never reaches a model twice (`readpage` caches under `crops/cache/`); tests replay `testdata/replay/*.read1.json` (saved from run 4, Haiku read 1) through the real crop + flag pipeline with no model calls (skipped if the photos are absent). After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
-3. Step 2 built and deployed (section above). **Live checkpoint:** in Telegram send `/pages`, the three page photos (as Files), `/done`, then a card photo and a typed name. Watch `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`. Then mark step 2 ✅ and push.
-4. Then step 3 (better matching + "Is this them?" buttons).
+3. Step 2 done (section above). When hydrogen is not 503 (try one tiny call first), re-send page1 and page2 to the bot in `/pages` mode to replace the Haiku readings, then forward the card again. Log: `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`.
+4. Next: step 3 (better matching + "Is this them?" Yes/No buttons, remember answers). It must handle the card's English-only names against Telugu-script lines (transliteration), given-name-first order, initials, and relation words.

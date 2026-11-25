@@ -39,3 +39,24 @@ func TestCachedNeverAsksTwice(t *testing.T) {
 		t.Errorf("calls %d, want 4", inner.calls)
 	}
 }
+
+type fallbackAsker struct{ calls int }
+
+func (f *fallbackAsker) ReadJSON(context.Context, string, map[string]any, ...Image) (Result, error) {
+	f.calls++
+	return Result{JSON: json.RawMessage(`{}`), Model: FallbackModel, PrimaryErr: errBusy}, nil
+}
+
+var errBusy = &geminiHTTPError{Status: 503, Message: "high demand"}
+
+// A fallback answer is not kept, so the primary model gets another chance.
+func TestCachedSkipsFallbackAnswers(t *testing.T) {
+	inner := &fallbackAsker{}
+	a := Cached(inner, t.TempDir(), "hydrogen-first")
+	photo := Image{Data: []byte("card")}
+	a.ReadJSON(context.Background(), "read", nil, photo)
+	a.ReadJSON(context.Background(), "read", nil, photo)
+	if inner.calls != 2 {
+		t.Errorf("calls %d, want 2", inner.calls)
+	}
+}

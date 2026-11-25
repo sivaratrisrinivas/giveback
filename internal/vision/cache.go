@@ -40,6 +40,11 @@ func (c cached) ReadJSON(ctx context.Context, prompt string, schema map[string]a
 	if err != nil {
 		return res, err
 	}
+	// A fallback answer is not kept: next time the primary model may be back,
+	// and its reading is the one we want to keep.
+	if res.PrimaryErr != nil {
+		return res, nil
+	}
 	if b, err := json.Marshal(cachedAnswer{res.JSON, res.Model, res.Elapsed}); err == nil {
 		if os.MkdirAll(c.dir, 0o755) == nil {
 			_ = os.WriteFile(path, b, 0o644) // a failed write only costs a repeat call later
