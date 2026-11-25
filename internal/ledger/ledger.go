@@ -56,7 +56,8 @@ CREATE TABLE IF NOT EXISTS lines (
 );
 CREATE TABLE IF NOT EXISTS chats (
 	chat_id INTEGER PRIMARY KEY,
-	mode    TEXT NOT NULL           -- "pages" while the family is adding notebook pages
+	mode    TEXT NOT NULL,          -- "pages" while the family is adding notebook pages
+	set_at  TEXT NOT NULL DEFAULT '' -- UTC RFC 3339: when the mode was last set or refreshed
 );
 CREATE TABLE IF NOT EXISTS updates (
 	update_id INTEGER PRIMARY KEY,  -- Telegram updates seen (it re-delivers on slow or failed replies)
@@ -124,6 +125,7 @@ func migrate(db *sql.DB) error {
 		{"lines", "checked", "INTEGER NOT NULL DEFAULT 0"},
 		{"updates", "done", "INTEGER NOT NULL DEFAULT 1"}, // updates seen before were handled
 		{"updates", "attempts", "INTEGER NOT NULL DEFAULT 1"},
+		{"chats", "set_at", "TEXT NOT NULL DEFAULT ''"}, // unknown: such a mode counts as old
 	} {
 		var n int
 		if err := db.QueryRow(`SELECT count(*) FROM pragma_table_info(?) WHERE name = ?`, c.table, c.name).Scan(&n); err != nil {
@@ -295,17 +297,25 @@ func (s *Store) Entries() ([]Entry, error) {
 
 // Mode returns what a chat is doing: "pages" while adding notebook pages, else "".
 func (s *Store) Mode(chatID int64) (string, error) {
-	var m string
-	err := s.db.QueryRow(`SELECT mode FROM chats WHERE chat_id = ?`, chatID).Scan(&m)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
-	}
+	m, _, err := s.ModeSince(chatID)
 	return m, err
 }
 
+// ModeSince is Mode plus when it was last set (zero if never recorded).
+func (s *Store) ModeSince(chatID int64) (string, time.Time, error) {
+	var m, at string
+	err := s.db.QueryRow(`SELECT mode, set_at FROM chats WHERE chat_id = ?`, chatID).Scan(&m, &at)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", time.Time{}, nil
+	}
+	t, _ := time.Parse(time.RFC3339, at)
+	return m, t, err
+}
+
 func (s *Store) SetMode(chatID int64, mode string) error {
-	_, err := s.db.Exec(`INSERT INTO chats (chat_id, mode) VALUES (?, ?)
-		ON CONFLICT(chat_id) DO UPDATE SET mode = excluded.mode`, chatID, strings.TrimSpace(mode))
+	_, err := s.db.Exec(`INSERT INTO chats (chat_id, mode, set_at) VALUES (?, ?, ?)
+		ON CONFLICT(chat_id) DO UPDATE SET mode = excluded.mode, set_at = excluded.set_at`,
+		chatID, strings.TrimSpace(mode), time.Now().UTC().Format(time.RFC3339))
 	return err
 }
 

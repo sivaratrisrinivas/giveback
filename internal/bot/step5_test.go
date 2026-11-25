@@ -128,3 +128,45 @@ func TestUsageCommand(t *testing.T) {
 		}
 	}
 }
+
+// A card sent while /pages mode is on is not stored as an empty page, and a
+// /pages mode left on for over 30 minutes no longer swallows cards.
+func TestForgottenPagesMode(t *testing.T) {
+	tg := &fakeTG{files: map[string][]byte{"card": tinyJPEG(t)}}
+	pageAsker := askFunc(func(context.Context, string, map[string]any, ...vision.Image) (vision.Result, error) {
+		return vision.Result{Model: "replay", JSON: []byte(`{"function":"Wedding Invitation","date":"03-04-2025","rotation":0,"lines":[]}`)}, nil
+	})
+	cardCalls := 0
+	cardAsker := askFunc(func(context.Context, string, map[string]any, ...vision.Image) (vision.Result, error) {
+		cardCalls++
+		return vision.Result{Model: "fake", JSON: []byte(`{"function_type":"wedding","date":"","venue":"","town":"","languages":["en"],"people":[]}`)}, nil
+	})
+	store, err := ledger.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := &Bot{Store: store, TG: tg, Pages: notebook.Models{Page: pageAsker, Amounts: pageAsker}, Cards: cardAsker}
+	ctx := context.Background()
+	b.Handle(ctx, msg(1, telegram.Message{Text: "/pages"}))
+	b.Handle(ctx, msg(2, photoMsg("card")))
+	if es, _ := store.Entries(); len(es) != 0 || !strings.Contains(tg.texts[len(tg.texts)-1], "I found no gift lines") {
+		t.Fatalf("empty page: %d lines, reply %q", len(es), tg.texts[len(tg.texts)-1])
+	}
+	if p, ok, _ := store.PageByHash(vision.Hash(tg.files["card"])); ok {
+		t.Fatalf("an empty page was stored: %+v", p)
+	}
+	if cardCalls != 0 {
+		t.Fatal("card read while in /pages mode")
+	}
+
+	defer func() { now = time.Now }()
+	now = func() time.Time { return time.Now().Add(31 * time.Minute) }
+	b.Handle(ctx, msg(3, photoMsg("card")))
+	if cardCalls != 1 {
+		t.Errorf("after 31 idle minutes the photo should be read as a card; card calls %d, replies %q", cardCalls, tg.texts)
+	}
+	if mode, _ := store.Mode(7); mode != "" {
+		t.Errorf("mode after expiry: %q", mode)
+	}
+}

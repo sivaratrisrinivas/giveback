@@ -51,6 +51,11 @@ type Bot struct {
 	mu sync.Mutex // one message at a time: simple, and SQLite has one writer
 }
 
+// pagesIdle is how long /pages mode lasts without a page arriving.
+const pagesIdle = 30 * time.Minute
+
+var now = time.Now // tests move the clock
+
 const (
 	modePages = "pages"
 	modeFix   = "fix:" // + line ID: the next typed message is that line's gift
@@ -129,7 +134,7 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 		if err := b.Store.SetMode(chat, modePages); err != nil {
 			return err
 		}
-		return b.say(ctx, chat, "Send the notebook pages now, one photo per page. Send /done when finished.")
+		return b.say(ctx, chat, "Send the notebook pages now, one photo per page. Send /done when finished. (After 30 minutes without a page, photos count as invitation cards again.)")
 	case cmd == "/done":
 		if err := b.Store.SetMode(chat, ""); err != nil {
 			return err
@@ -146,9 +151,17 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 	}
 
 	if fileID, ok := m.ImageFileID(); ok {
-		mode, err := b.Store.Mode(chat)
+		mode, since, err := b.Store.ModeSince(chat)
 		if err != nil {
 			return err
+		}
+		if mode == modePages && now().Sub(since) > pagesIdle {
+			// A forgotten /done must not turn next month's invitation into a page.
+			log.Printf("chat %d: /pages mode was left on since %s; treating this photo as a card", chat, since.Format(time.RFC3339))
+			if err := b.Store.SetMode(chat, ""); err != nil {
+				return err
+			}
+			mode = ""
 		}
 		data, err := b.TG.Download(ctx, fileID)
 		if err != nil {
@@ -157,6 +170,11 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 		}
 		isPage := mode == modePages || strings.Contains(strings.ToLower(m.Caption), "page")
 		if isPage {
+			if mode == modePages {
+				if err := b.Store.SetMode(chat, modePages); err != nil { // still adding pages: restart the clock
+					return err
+				}
+			}
 			return b.addPage(ctx, chat, data)
 		}
 		return b.answerCard(ctx, chat, data)
@@ -205,6 +223,11 @@ func (b *Bot) addPage(ctx context.Context, chat int64, data []byte) error {
 		return b.say(ctx, chat, "Sorry, I couldn't read that page just now. Please try again in a little while.")
 	}
 	logSkipped(chat, "page read 1", p.FirstRead)
+	if len(p.Lines) == 0 {
+		log.Printf("chat %d: no gift lines found (%q, %q); not added", chat, p.Function, p.Date)
+		return b.say(ctx, chat, "I found no gift lines in this photo, so I didn't add it to the notebook. "+
+			"If it's an invitation card, send /done and then forward it again.")
+	}
 	if reread == 0 {
 		// Another photo of a page we already have (photos of one page never
 		// match byte for byte): don't add its lines twice.

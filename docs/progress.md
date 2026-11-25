@@ -28,7 +28,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 | 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | ✅ works live (2026-11-25, read by the Haiku fallback: hydrogen was 503) |
 | 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | ✅ works live (2026-11-26 00:14 IST): `/family`, Yes/No buttons, remembered answers. Relation-word demo waits for a hydrogen re-read of the pages |
 | 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | ✅ works live (2026-11-26 ~00:56 IST): values with source, flagged amount confirmed by typing, gold corrected by weight |
-| 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
+| 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | built, tested offline, deployed 2026-11-26 01:18 IST; live wake check pending |
 | 6 | Household split: new Sprite `giveback-<name>`, copy data, second bot, timed | — |
 | 7 | Buffer (1h). No new features after this point. | — |
 | 8 | Submission (5h): blur/replace private details; 60–90 s video with voiceover + captions (CanVid on Windows), asleep→awake moment at the centre; architecture diagram + 4–6 annotated screenshots; GitHub README with install steps, name every Fly/Sprites technology in "How we built it", our Sprites findings as "what we learned"; submit early (aim Nov 26); post tagging @flydotio | — |
@@ -154,6 +154,17 @@ How it works:
   - Fixed after: a second tap on "Something else" repeated the prompt (the button stays visible). It now just shows "Type it in the message box".
   - Side note (step 3 matcher, not changed): typing only "Ramana Reddy" gives "Is this them?" because the line's initial K. is not in what was typed; a card with the full name matches strongly.
 - Tests (no model calls): `internal/worth` (each base, year-only, no-guess cases, cite text), `TestTodayValueInCaption`, `TestConfirmFlaggedAmount` (tap a reading, then "Something else" + typed gold), `TestParseGift`, `TestMigrateOldLedger`.
+
+## Step 5: sleep/wake, dedupe, logging (as built, 2026-11-26)
+
+- `internal/wake`: a sleeping Sprite freezes the process, so the program only sees time jump. A 1 s ticker (and every request) checks; a jump of 5 s+ is logged as `wake: the Sprite slept for …` with both wall and monotonic clocks (we don't yet know if the monotonic clock counts a Sprite sleep: the live log will tell). The first request after a wake logs `first request after the Sprite woke …` and `woken by this message; from sending it to the reply: about Ns (delivery Ns + handling …)`. `GET /` shows "process up …, slept N time(s) …; the last sleep lasted … and ended … ago".
+  - Go stamps a ticker tick with when it was *due*, which after a freeze is a time from before it; the watcher reads `time.Now()` instead.
+  - Tested locally by freezing the process with `kill -STOP` for 8 s: detected as "slept 9s" on both clocks.
+- `internal/vision/meter.go`: every model attempt, failed Gemini tries included, is a `Call` (model, ok/error, time, tokens in/out/thinking, cost) and gets a log line `model call: …`. Cost: Haiku 5.5 $0.10/$0.50 per MTok; Gemini $0 (free tier), tokens still counted. Calls are collected per update (`vision.WithMeter`), summed in one log line `update N: K model call(s) (F failed), C answer(s) from cache, tokens …, cost $…`, and stored in the new `calls` table. Cache hits are counted, not stored.
+- `/usage` (not in the family help): per model, last 24 h and since the start: calls, failed, tokens, cost, average seconds; and the Sprite's wake status. For the README's cost numbers.
+- Hardening: updates are now `Claim`ed (done = 0) and `Finish`ed after a successful reply. A re-delivery of an update whose try never finished (process restarted mid-reply) is handled once more (max 2 tries); finished ones are dropped as before. Old `updates` rows count as done (migration). Graceful shutdown on SIGTERM (deploy restarts) waits up to 2 min for a reply in progress. "typing…" is re-sent every 4 s while a model reads (Telegram clears it after ~5 s).
+- Dedupe: `ledger.SamePage` spots another photo of a page already stored (different bytes, so a different hash): ≥ 3 lines, and ≥ 60% of its lines with cash or gold, have the same line number and amount. Then the page is not added again ("I already have this page"), unless the stored one was read by the Haiku fallback and the new one by hydrogen: then the new reading replaces it. (Photos of the same bytes were already caught by hash, and model answers by the cache.)
+- Tests (no model calls): fake Gemini/Claude servers for token and cost counting incl. a fallback and a cache hit; claim/finish/retry; usage sums; old-ledger migration of `updates`; a second and third photo of page 1 (fallback reading replaced, then "already have"); `/usage` text; wake detection with injected times. `go test -race ./...` passes.
 
 ## Next session: start here
 
