@@ -25,7 +25,7 @@ Reordered 2026-11-25 after checking the hackathon playbook: get a thin end-to-en
 |---|---|---|
 | 0 | Sprite, connectors, public URL, Telegram webhook, sleep/wake | ✅ done |
 | 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, read a real card | ✅ (all-hydrogen re-run pending billing) |
-| 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | — next |
+| 2 | **Thin end-to-end slice:** send page photos to the bot → SQLite ledger with crops; forward a card → simple name match → reply with the cropped handwritten line, amount, function, year; flagged amounts shown as "please check". Demoable after this step. | 🟡 built, tests pass, deployed; live checkpoint pending |
 | 3 | Better matching + "Is this them?": transliteration-aware fuzzy match, surname-first, initials, Telugu relation words via a family tree, Yes/No buttons, remember answers | — |
 | 4 | "About ₹X today" (CPI-IW with linking factors, cited); gold by weight only; confirm flagged amounts in chat | — |
 | 5 | Sleep/wake hardening, dedupe, wake-time logging; per-request token/cost logging | — |
@@ -93,8 +93,18 @@ How it works:
 - Times: hydrogen read 1 13–18 s per page; Haiku 13–33 s. Not on the reply path (pages are added once).
 - Not yet seen: **hydrogen on the turned photo with the final code** (quota ran out). Re-run `readpage` once after the quota resets.
 
+## Step 2: the thin slice (as built, 2026-11-25)
+
+- `internal/ledger`: SQLite (`modernc.org/sqlite`, pure Go, so `CGO_ENABLED=0` still works) at `~/giveback/data/ledger.db` on the Sprite, and one JPEG per line under `data/crops/<page>/`. Pages are unique by photo SHA-256; both raw model answers are stored with each page. Telegram update IDs are stored too, so a re-delivery is dropped even after a restart.
+- `internal/match`: simple first matcher. Normalised name words (lower case, titles like Sri/garu/గారు and initials dropped), compared within each script. 2+ shared words = "Found in the notebook"; 1 shared word = "Is this them? Only the name X matches." Same town ranks first. No transliteration yet (step 3), so an English-only card name will not find a Telugu-script notebook line.
+- `internal/bot`: `/pages` → each photo is a page (or a caption containing "page"); `/done` ends it. Any other photo is an invitation card: hosts are read (`internal/card`), matched, and each hit is sent as the cropped handwritten line with function, date, line number, the line as read, the gift (₹ with Indian grouping, gold in sovereigns, items), and "⚠️ Please check the handwriting: …" for flagged lines. Plain text is a name lookup (no model call). Photos over 2000 px are shrunk first.
+- `main.go`: all model calls go through `vision.Cached` under `data/cache/`. Work runs inside the webhook request (keeps the Sprite awake) with its own 4-minute context, so it finishes even if Telegram gives up waiting and re-delivers.
+- Tests (`go test ./...`, no model calls): `internal/bot` TestThinSlice adds page1 + page2 from saved answers, checks a repeat photo and a re-delivered update cost 0 model calls, forwards a faked card for Kothapalli Venkata Ramana Reddy and gets both of his lines back as pictures.
+- **Not yet seen live:** Telegram's webhook timeout on a ~40–60 s page read (if it re-delivers, the ledger drops the repeat; watch the log), and how well hydrogen reads Telegram-compressed photos (≤1280 px unless sent as a File).
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
 2. Page reader built (above). Follow-ups done 2026-11-25: read 2 calls Haiku directly (`vision.Reader.Haiku()`); `vision.Cached` keeps every model answer on disk keyed by a hash of route + prompt + image bytes, so the same photo never reaches a model twice (`readpage` caches under `crops/cache/`); tests replay `testdata/replay/*.read1.json` (saved from run 4, Haiku read 1) through the real crop + flag pipeline with no model calls (skipped if the photos are absent). After the next 13:30 IST quota reset, run `readpage` once on all three photos for the final table.
-3. Build step 2, the thin slice (plan table). Keep matching simple for now (normalised name/surname overlap); the full matcher is step 3.
+3. Step 2 built and deployed (section above). **Live checkpoint:** in Telegram send `/pages`, the three page photos (as Files), `/done`, then a card photo and a typed name. Watch `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`. Then mark step 2 ✅ and push.
+4. Then step 3 (better matching + "Is this them?" buttons).
