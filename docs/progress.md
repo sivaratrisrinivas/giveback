@@ -18,7 +18,7 @@ Handoff notes between build sessions. Read this first, then `/mnt/c/Users/Sriniv
 | # | Step | Status |
 |---|---|---|
 | 0 | Sprite, connectors, public URL, Telegram webhook, sleep/wake | ✅ done |
-| 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, match a real card | 🟡 card half done; notebook pages pending |
+| 1 | Riskiest piece: read real handwritten pages, crop each line, read amounts twice, match a real card | ✅ card + notebook pages (hydrogen re-run of the turned photo pending, see below) |
 | 2 | Ledger (SQLite), add pages by photo in Telegram, confirm flagged amounts | — |
 | 3 | Telugu relation words, family tree, "Is this them?" buttons, remember answers | — |
 | 4 | Reply: cropped line, amount, year, function, "about ₹X today" (CPI-IW with linking factors, cited); gold by weight only | — |
@@ -45,6 +45,7 @@ Handoff notes between build sessions. Read this first, then `/mnt/c/Users/Sriniv
 - The Sprite's built-in docs say "services keep the sprite alive"; in practice it paused with the service running.
 - `sprite file push` needs `-p`, or it wrongly reports "directory does not exist".
 - Gemini free tier: `gemini-flash-latest` / `gemini-3.8-flash` often 503 ("high demand"); `gemini-2.5-flash` is closed to new users. `gemini-4-hydrogen` answered every time so far.
+- **Gemini free tier has a small daily quota for `gemini-4-hydrogen`.** About 25 page-sized requests in ~30 minutes of testing used it up: after that every call got 429 "You exceeded your current quota" with no `retryDelay`, for 10+ minutes. Free-tier daily quotas reset at midnight Pacific (13:30 IST). This affects the demo: either enable billing on the AI Studio key or keep test runs few. `internal/vision` now retries Gemini once on 503, or on a 429 that asks for ≤ 20 s, and only then falls back to Haiku.
 - Connector request bodies are limited to 8 MB, and the Gemini Files API is not forwarded: send images inline and shrink photos first.
 
 ## Step 1 results so far: reading the wedding card
@@ -60,8 +61,32 @@ Card: `/mnt/c/Users/Srinivas/Downloads/jayaprakash.jpeg` (a real card, kept out 
 
 **Open issue: 16.5 s is too slow for a snappy reply.** Next things to try: shrink the 3417×2530 photo to about 1600 px before sending, show "typing…" at once, and tell the family "Reading the card…" so the wait is visible.
 
+## Step 1 results: reading the notebook pages
+
+`internal/notebook` + `cmd/readpage` (run on the Sprite: `./readpage notebook/page1.jpeg notebook/page1-rotated.jpeg notebook/page2.jpeg`; it saves crops and `read1.json` under `crops/`, prints a score table against `docs/synthetic-notebook.md`, which it parses directly).
+
+How it works:
+1. **Read 1**, one request per page: heading, date, rotation, and per line the text, name, place, amount digits, gold sovereigns, item, an `unclear` bit, and a box (0–1000).
+2. **Sideways photo → turn it and read again.** Models place boxes and read far better upright, and the turn they claimed is checked. Costs one extra request, only for sideways photos.
+3. **Crops are snapped to the ink.** Model boxes are loose (even hydrogen's clipped "1,116/" and spilled into the next line), so a box only says roughly where a line is: cut at the emptiest pixel row between neighbouring lines, and widen sideways until the ink stops. Faint show-through falls below the ink threshold.
+4. **Read 2**, one request per page with all the crops: "list every digit of the money at the end of the line". Any disagreement with read 1 (cash or gold), an `unclear` line, or a missing crop flags the line.
+
+| Photo | Run | Models (read 1 / 2) | Text CER | Amounts right | Flagged (false alarms) | Wrong & not flagged |
+|---|---|---|---|---|---|---|
+| page1 | 2 | hydrogen / haiku | 0.8% (చామల → చావల) | 10/10 | 1 (1) | 0 |
+| page2 | 2 | hydrogen / haiku | 0.0% | 8/8 | 1 (1) | 0 |
+| page1 | 4 (final code) | haiku / haiku | 25.1% | 10/10 | 6 (6) | 0 |
+| page1-rotated | 4 (final code) | haiku / haiku | 9.3% | 10/10 | 4 (4) | 0 |
+| page2 | 4 (final code) | haiku / haiku | 16.1% | 7/8 | 3 (2) | 0 |
+
+- **0 wrong amounts went unflagged in any run** (4 runs, 3 photos each). The one wrong amount (Haiku, 2.5 "2 కాసులు" read as 25) was caught by read 2.
+- Hydrogen reads the Telugu almost perfectly; Haiku invents Telugu names (మల్లేశం for ముత్యాలు) but marks them `unclear`, so they are flagged.
+- Read 2 by Haiku keeps reading 1.5 "1116" as "116": a false alarm, not a miss. Hydrogen read 2 (run 1, page2) agreed on every line.
+- Times: hydrogen read 1 13–18 s per page; Haiku 13–33 s. Not on the reply path (pages are added once).
+- Not yet seen: **hydrogen on the turned photo with the final code** (quota ran out). Re-run `readpage` once after the quota resets.
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
-2. Build the page reader: one request per page returns lines with text, amount digits, and a bounding box. Read amounts a second time with a different prompt and flag any disagreement. Crop each line with Go `image` (+ `golang.org/x/image/draw` for resizing). Score against `docs/synthetic-notebook.md`.
+2. Page reader built (above). First: re-run `readpage` on the Sprite once the Gemini quota resets, to get an all-hydrogen table, and update this file.
 3. Matching card hosts to ledger lines: transliteration-aware fuzzy match (Telugu script and English), surname-first order, initials ("B." → Butham), relation words (మామ → mother's brother) resolved through the family tree; rank, then ask "Is this them?".

@@ -76,6 +76,19 @@ func (r *Reader) ReadJSON(ctx context.Context, prompt string, schema map[string]
 	pctx, cancel := context.WithTimeout(ctx, r.PrimaryTimeout)
 	out, err := r.gemini(pctx, prompt, schema, imgs)
 	cancel()
+	// "High demand" (503) and rate limits (429) on the free tier usually pass in
+	// a moment: try Gemini once more before falling back. A timeout is not retried.
+	var he *geminiHTTPError
+	if errors.As(err, &he) && (he.Status == 503 || (he.Status == 429 && he.RetryAfter <= maxRetryWait)) {
+		wait := max(he.RetryAfter, 2*time.Second)
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+		}
+		pctx, cancel = context.WithTimeout(ctx, r.PrimaryTimeout)
+		out, err = r.gemini(pctx, prompt, schema, imgs)
+		cancel()
+	}
 	if err == nil {
 		return Result{JSON: out, Model: PrimaryModel, Elapsed: time.Since(start)}, nil
 	}
@@ -116,7 +129,7 @@ func (r *Reader) gemini(ctx context.Context, prompt string, schema map[string]an
 	defer resp.Body.Close()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("gemini HTTP %d: %s", resp.StatusCode, firstLine(raw))
+		return nil, newGeminiHTTPError(resp.StatusCode, raw)
 	}
 	var gr struct {
 		Candidates []struct {
@@ -196,4 +209,39 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// maxRetryWait is the longest Gemini may ask us to wait (429 retryDelay) before
+// we try it again rather than falling back.
+const maxRetryWait = 20 * time.Second
+
+type geminiHTTPError struct {
+	Status     int
+	Message    string
+	RetryAfter time.Duration
+}
+
+func (e *geminiHTTPError) Error() string {
+	return fmt.Sprintf("gemini HTTP %d: %s", e.Status, e.Message)
+}
+
+func newGeminiHTTPError(status int, raw []byte) *geminiHTTPError {
+	e := &geminiHTTPError{Status: status, Message: firstLine(raw)}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+			Details []struct {
+				RetryDelay string `json:"retryDelay"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(raw, &body) == nil && body.Error.Message != "" {
+		e.Message = firstLine([]byte(body.Error.Message))
+		for _, d := range body.Error.Details {
+			if t, err := time.ParseDuration(d.RetryDelay); err == nil {
+				e.RetryAfter = t
+			}
+		}
+	}
+	return e
 }
