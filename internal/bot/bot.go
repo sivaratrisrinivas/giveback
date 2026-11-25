@@ -402,9 +402,30 @@ func (b *Bot) family(ctx context.Context, chat int64, arg string) error {
 		sb.WriteString("\n\nTo change it:\n/family father = Bandaru Subba Rao\n/family mother = Butham Lakshmi (maiden name, surname first)\n/family babai = Bandaru Ramulu\n/family babai =   (forgets it)")
 		return b.say(ctx, chat, sb.String())
 	}
+	// Several lines in one message ("/family father = …" then "/family mother = …").
+	var replies []string
+	for _, line := range strings.Split(arg, "\n") {
+		line = strings.TrimSpace(line)
+		if low := strings.ToLower(line); strings.HasPrefix(low, "/family") {
+			line = strings.TrimSpace(line[len("/family"):])
+		}
+		if line == "" {
+			continue
+		}
+		r, err := b.familyLine(line)
+		if err != nil {
+			return err
+		}
+		replies = append(replies, r)
+	}
+	return b.say(ctx, chat, strings.Join(replies, "\n"))
+}
+
+// familyLine handles one "relation = name" and returns the reply line.
+func (b *Bot) familyLine(arg string) (string, error) {
 	rel, name, ok := strings.Cut(arg, "=")
 	if !ok {
-		return b.say(ctx, chat, "Please write it like this: /family father = Bandaru Subba Rao")
+		return fmt.Sprintf("I didn't understand %q. Please write it like this: /family father = Bandaru Subba Rao", arg), nil
 	}
 	rel, name = strings.TrimSpace(rel), strings.TrimSpace(name)
 	key := ""
@@ -416,17 +437,17 @@ func (b *Bot) family(ctx context.Context, chat int64, arg string) error {
 	default:
 		r, ok := match.RelationOf(strings.ReplaceAll(rel, " ", ""))
 		if !ok {
-			return b.say(ctx, chat, fmt.Sprintf("I don't know the relation word %q. Try father, mother, or a word like mama, atha, babai, peddananna, pinni.", rel))
+			return fmt.Sprintf("I don't know the relation word %q. Try father, mother, or a word like mama, atha, babai, peddananna, pinni.", rel), nil
 		}
 		key = r.Word
 	}
 	if err := b.Store.SetFamily(key, name); err != nil {
-		return err
+		return "", err
 	}
 	if name == "" {
-		return b.say(ctx, chat, fmt.Sprintf("Forgotten: %s.", key))
+		return fmt.Sprintf("Forgotten: %s.", key), nil
 	}
-	return b.say(ctx, chat, fmt.Sprintf("Noted: %s = %s.", key, name))
+	return fmt.Sprintf("Noted: %s = %s.", key, name), nil
 }
 
 // Caption describes one notebook line under its handwritten picture. who is

@@ -276,9 +276,9 @@ func TestRelationAskAndRemember(t *testing.T) {
 	if !strings.Contains(last(), "couldn't find") {
 		t.Fatalf("without a family tree: %q", last())
 	}
-	send(msg(2, telegram.Message{Text: "/family father = Bandaru Subba Rao"}))
-	send(msg(3, telegram.Message{Text: "/family mother = Butham Lakshmi"}))
-	if !strings.Contains(last(), "Noted: mother = Butham Lakshmi") {
+	// Both lines in one message, as people paste them.
+	send(msg(2, telegram.Message{Text: "/family father = Bandaru Subba Rao\n/family mother = Butham Lakshmi"}))
+	if last() != "Noted: father = Bandaru Subba Rao.\nNoted: mother = Butham Lakshmi." {
 		t.Fatalf("family reply: %q", last())
 	}
 	// The lines have no pictures here, so they come back as texts.
