@@ -74,7 +74,7 @@ func New() *Reader {
 			option.WithAPIKey("sprites-gateway"),
 			option.WithMaxRetries(1),
 		),
-		PrimaryTimeout: 45 * time.Second,
+		PrimaryTimeout: 25 * time.Second, // hydrogen reads take 10–18 s; a hang should not hold a card reply past Telegram's 60 s re-delivery
 	}
 }
 
