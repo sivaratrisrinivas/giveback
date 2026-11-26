@@ -187,6 +187,22 @@ How it works:
 - **The connector grant by name prefix covers a new Sprite at once:** a tiny Haiku call from `giveback-ravi` answered 200 with no dashboard step.
 - Dry run on a local pull of the live ledger: `copied 2 page(s), 18 line(s) … in 9ms`, 236 KB. Pulling the live data dir took 24 s (the Sprite woke).
 
+## Live checkpoint 7a, 2026-11-26 23:19–23:38 IST (hydrogen page readings)
+
+- Tiny hydrogen call: first try hung 40 s (curl timeout), second answered 200 in 11 s.
+- `/pages`, page1 as File: "read by my backup reader. Reading it again…" → **hydrogen read 1 in 17.3 s**, Haiku read 2 5.1 s; heading పద్మ పెళ్ళి right; 1 flag (B. Narsimha 1116/116, the known false alarm). page2: hydrogen 503 once, retried, **hydrogen 14.8 s**; 1 flag: Haiku read 2 saw "2 కాసులు" as ₹250 (false alarm, safe side). Live ledger is now hydrogen-read (ledger pages 3 and 4, 18 lines).
+- "Bandaru Ramulu": four "Is this Bandaru Ramulu?" questions (పెద్దనాన్న 1.3, బాబాయి 1.7 and 2.5, పిన్ని 1.9), each with the father's-surname reason. Yes on 1.7, No on 1.3 and 1.9, ✅ 2 sovereigns on 2.5 → typed again: 1.7 "you confirmed", 2.5 "బాబాయి is Bandaru Ramulu, as you told me … (you checked this)", "(2 line(s) you told me aren't them are left out.)".
+- Jayaprakash card: **Butham Muthyalu strongly matched 1.1 (₹516 → about ₹4,100) and 2.1 (₹1,116 → about ₹4,600)**; Muthyalu, Chityal 1.10/2.8 asked, not merged; Vimala atha 2.3 asked with the mother's-maiden-surname reason.
+- Problems seen: (1) **the card took 62 s**: hydrogen hung to its 45 s `PrimaryTimeout`, then Haiku read it in 8.5 s; Telegram re-delivered at 60 s and the dedupe dropped it. Proposed fix: PrimaryTimeout 25 s (hydrogen reads took 10–18 s). (2) The crop for 2.3 (విమల అత్త) shows only "– ల". (3) Tapping an amount button also removes the Yes/No buttons of that message.
+- Finding: after a 19 h idle, the wake log said wall clock 19h23m but **monotonic 10m4s** (short sleeps count on both clocks), so a long sleep is not seen by the monotonic clock.
+- `readpage` final run (pages 1 and 2 replayed from the bot's hydrogen cache, copied into `~/readpage/crops/cache`):
+
+| Photo | Read 1 / 2 | Text CER | Amounts right | Flagged (false alarms) | Wrong & not flagged |
+|---|---|---|---|---|---|
+| page1 | hydrogen / haiku | 1.4% | 10/10 | 1 (1) | 0 |
+| page2 | hydrogen / haiku | 0.0% | 8/8 | 1 (1) | 0 |
+| page1-rotated | haiku / haiku (hydrogen 503 twice) | 12.1% | 10/10 | 3 (3) | 0 |
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
@@ -196,7 +212,7 @@ How it works:
 5. Step 4 works live (section above). **Hydrogen is on and off:** 503 at 00:17 IST on Nov 26, "ok" at 00:58, then 503 on page 1 at 01:01 (the bot retried once, then Haiku re-read it: page 1 is now ledger page 3, still Haiku), and 503 twice more at 01:03. Page 2 was not re-sent. So a tiny call succeeding doesn't mean the page will: re-send right after one, and expect to retry. Each failed try costs one Haiku re-read (~$0.003). Re-reading the pages with hydrogen drops the live confirmations (line IDs change), which is fine.
 6. Step 5 works live (sections above). `/usage` shows model costs and the Sprite's sleeps; `GET /` shows the wake status.
 7. **Next session, in order:**
-   a. **After 13:30 IST (quota reset)**, one tiny hydrogen call from the Sprite (`sprite exec -s giveback-bandaru --no-stdin -- sh -c 'curl -s -m 40 -o /dev/null -w "%{http_code}\n" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"Say ok\"}]}]}" https://api.sprites.dev/v1/gateway/gemini/_etoR37tem2Nad0NLj32jQ/v1beta/models/gemini-4-hydrogen:generateContent'`). If 200: user sends `/pages`, page1 (as File), check the log says `read 1 gemini-4-hydrogen` (or `model call: gemini-4-hydrogen ok`), then page2, then `/done`. A new photo of a Haiku-read page now replaces it too (same-page dedupe). Then "Bandaru Ramulu", then forward the jayaprakash card. Also run `readpage` once on the three photos for the final step 1 table if quota allows (it costs ~4–6 hydrogen calls; the pages come first).
+   a. ✅ **Done 2026-11-26 23:38 IST** (section above). Was: **After 13:30 IST (quota reset)**, one tiny hydrogen call from the Sprite (`sprite exec -s giveback-bandaru --no-stdin -- sh -c 'curl -s -m 40 -o /dev/null -w "%{http_code}\n" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"Say ok\"}]}]}" https://api.sprites.dev/v1/gateway/gemini/_etoR37tem2Nad0NLj32jQ/v1beta/models/gemini-4-hydrogen:generateContent'`). If 200: user sends `/pages`, page1 (as File), check the log says `read 1 gemini-4-hydrogen` (or `model call: gemini-4-hydrogen ok`), then page2, then `/done`. A new photo of a Haiku-read page now replaces it too (same-page dedupe). Then "Bandaru Ramulu", then forward the jayaprakash card. Also run `readpage` once on the three photos for the final step 1 table if quota allows (it costs ~4–6 hydrogen calls; the pages come first).
    b. Step 6 works live (section above). The current `giveback-ravi` carries the Haiku readings. **After 7a**, for the filmed split: ask the user before `sprite destroy giveback-ravi`, then `scripts/split.sh giveback-bandaru Bandaru Ravi ~/.config/giveback/bot2.token` again (bot2.token is saved; @giveback_ravi_bot) so the copy carries the hydrogen readings. Show the Sprite asleep (`sprite info` → cold) before forwarding the card.
    c. Then step 7 (1 h buffer, no new features) and step 8 (submission: check the hackathon-playbook MCP `submitting` and `pitching` checklists first).
    When `TodayMonth` gets old, take the newest month from https://labourbureau.gov.in/CPI.
