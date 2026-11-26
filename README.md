@@ -106,4 +106,5 @@ Tests make no model calls (`go test ./...`): they replay saved model answers thr
 - Choosing between several weddings on the same auspicious date
 - Recorded family stories attached to notebook lines
 - Scanned pages kept in Box through its connector
-- Tamil and Malayalam notebooks (the matcher's sound keys are Telugu-first today)
+- Cards sent as a PDF or as pasted text, such as a WhatsApp invitation message (today only photos of a card are read)
+- Tamil, Hindi, Kannada and Malayalam notebooks: the models can read the handwriting, but the matcher only links Telugu script to English spellings, and the 19 relation words it knows are Telugu (బాబాయి, అత్త, మామ…). Each language needs its own script-to-English rules and its own relation words (*chithappa*, *chacha*…)
