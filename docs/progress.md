@@ -203,6 +203,12 @@ How it works:
 | page2 | hydrogen / haiku | 0.0% | 8/8 | 1 (1) | 0 |
 | page1-rotated | haiku / haiku (hydrogen 503 twice) | 12.1% | 10/10 | 3 (3) | 0 |
 
+## 7b, 2026-11-26 23:40–23:50 IST: timeout fix and the filmed re-split
+
+- Hydrogen `PrimaryTimeout` 45 s → 25 s (83270eb), deployed to giveback-bandaru.
+- With the user's OK: `sprite destroy --force giveback-ravi`, then `scripts/split.sh giveback-bandaru Bandaru Ravi ~/.config/giveback/bot2.token`: **57.0 s** (created 4.3 s, snapshot 8.9 s with copy-for 32 ms / 136 KB, moved 11.8 s, bot + webhook 28.5 s, answering 3.4 s).
+- @giveback_ravi_bot: `/start` tells the copy story; "Bandaru Ramulu" → 1.7 "you confirmed", 2.5 "as you told me … (you checked this)", 2 left out. **The family's answers travel with the copy, not just the pages.**
+
 ## Next session: start here
 
 1. **Notebook pages: done by hand.** The user wrote both pages (copy sheet: `docs/handwriting-sheet.html`). Photos in `testdata/notebook/` (page1, page1-rotated, page2); kept out of git until the user agrees to publish their handwriting. The answer key `docs/synthetic-notebook.md` matches what was written (row 1.1 changed to "ముత్యాలు భూతం").
@@ -213,6 +219,6 @@ How it works:
 6. Step 5 works live (sections above). `/usage` shows model costs and the Sprite's sleeps; `GET /` shows the wake status.
 7. **Next session, in order:**
    a. ✅ **Done 2026-11-26 23:38 IST** (section above). Was: **After 13:30 IST (quota reset)**, one tiny hydrogen call from the Sprite (`sprite exec -s giveback-bandaru --no-stdin -- sh -c 'curl -s -m 40 -o /dev/null -w "%{http_code}\n" -H "Content-Type: application/json" -d "{\"contents\":[{\"parts\":[{\"text\":\"Say ok\"}]}]}" https://api.sprites.dev/v1/gateway/gemini/_etoR37tem2Nad0NLj32jQ/v1beta/models/gemini-4-hydrogen:generateContent'`). If 200: user sends `/pages`, page1 (as File), check the log says `read 1 gemini-4-hydrogen` (or `model call: gemini-4-hydrogen ok`), then page2, then `/done`. A new photo of a Haiku-read page now replaces it too (same-page dedupe). Then "Bandaru Ramulu", then forward the jayaprakash card. Also run `readpage` once on the three photos for the final step 1 table if quota allows (it costs ~4–6 hydrogen calls; the pages come first).
-   b. Step 6 works live (section above). The current `giveback-ravi` carries the Haiku readings. **After 7a**, for the filmed split: ask the user before `sprite destroy giveback-ravi`, then `scripts/split.sh giveback-bandaru Bandaru Ravi ~/.config/giveback/bot2.token` again (bot2.token is saved; @giveback_ravi_bot) so the copy carries the hydrogen readings. Show the Sprite asleep (`sprite info` → cold) before forwarding the card.
+   b. ✅ **Done 2026-11-26 23:50 IST** (section above). Was: Step 6 works live (section above). The current `giveback-ravi` carries the Haiku readings. **After 7a**, for the filmed split: ask the user before `sprite destroy giveback-ravi`, then `scripts/split.sh giveback-bandaru Bandaru Ravi ~/.config/giveback/bot2.token` again (bot2.token is saved; @giveback_ravi_bot) so the copy carries the hydrogen readings. Show the Sprite asleep (`sprite info` → cold) before forwarding the card.
    c. Then step 7 (1 h buffer, no new features) and step 8 (submission: check the hackathon-playbook MCP `submitting` and `pitching` checklists first).
    When `TodayMonth` gets old, take the newest month from https://labourbureau.gov.in/CPI.
