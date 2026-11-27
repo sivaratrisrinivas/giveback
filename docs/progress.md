@@ -266,4 +266,11 @@ Why: people from the X post (`docs/x-post.md`) and judges can't try Giveback wit
 
 - Bot **@giveback_demo_bot** (token `~/.config/giveback/bot3.token`), deployed with `scripts/deploy.sh giveback-demo ~/.config/giveback/bot3.token`. README top line and `docs/x-post.md` have the link. The hackathon form is submitted (the user did it; demo link = the X post).
 - Checked live: `/start` sends the text and the card; forwarding the card back: hydrogen 503 twice, Haiku read it in 16.5 s ($0.00077, **not cached**, since fallback answers never are, so each forward costs one Haiku read until hydrogen reads it once; the cap bounds it). Both Butham Muthyalu lines strong (₹516 → ~₹4,100; ₹1,116 → ~₹4,600); Chityal Muthyalu 1.10 and 2.8 and విమల అత్త asked; "Bandaru Ramulu" asked 4×; ✅ on 1.7 taught బాబాయి for that chat only.
-- **Bug seen:** on the demo's page 1 (hydrogen read of 2026-11-28), line 1.9 పిన్ని's picture shows the 1.10 handwriting ("Muthyalu, Chityal - 58/-") and 1.10's picture is blank. The text and amounts are right; only the bottom crops are off by one line.
+- **Bug seen (fixed in bba62c0, below):** on the demo's page 1 (hydrogen read of 2026-11-28), line 1.9 పిన్ని's picture shows the 1.10 handwriting ("Muthyalu, Chityal - 58/-") and 1.10's picture is blank. The text and amounts are right; only the bottom crops are off by one line.
+
+### Crop fix, 2026-11-28 ~03:05 IST (bba62c0)
+
+- Cause: hydrogen's boxes drifted up from line 8 down (line 8's crop held lines 8+9, 9's held 10, 10's was a 41x46 blank). `cropLines` now calls `alignToWriting`: rows of writing found from the ink (`writingRows`, thin runs such as Telugu marks joined to the nearest row); boxes moved onto them only if the boxes' area (half a line above the first to 1.5 lines below the last) has exactly one row per box and no box moves > 1.5 lines. Else unchanged.
+- Checked on all saved readings (demo pages 1+2, replay page1/page2/page1-rotated): demo page 1 fixed; page 2 (stray mark under 2.3), page2 replay and rotated replay byte-identical to before; page1 replay slightly different, still correct. New test `TestCropFollowsDriftingBoxes` fails on the old code, passes on the new.
+- Demo re-seeded: service stopped, old ledger and crops kept in `~/giveback/old/*.before-recrop` on giveback-demo, `seed-demo` rerun (read 1 from cache, page 1 read 2 Haiku $0.00066, page 2 fully cached). This reset the demo's per-chat answers and card counts. Live crops 1.9 and 1.10 checked by eye.
+- The Bandaru/Ravi ledgers were not touched; they keep their old crops.
