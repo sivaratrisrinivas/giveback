@@ -24,7 +24,9 @@ Giveback is a Telegram bot that lives on the family's own Fly.io Sprite:
 
 ## Demo
 
-<!-- TODO: demo video link + hero screenshot -->
+[![Giveback demo: a forwarded wedding card answered with the handwritten notebook line, ₹516 then and about ₹4,100 today](docs/media/demo-poster.jpg)](docs/media/giveback-demo.mp4)
+
+[Watch the demo video](docs/media/giveback-demo.mp4) (1m 41s, with captions), or [on X](https://x.com/SrinivasSi78619/status/2126418661833609472). The notebook entries are invented; the one real card shown has its private details blurred.
 
 ## How it works
 
