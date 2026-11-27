@@ -246,3 +246,18 @@ Why: people from the X post (`docs/x-post.md`) and judges can't try Giveback wit
 4. Tests (no model calls): demo refuses `/pages`; two chats' answers don't mix; the cap. Deploy with `scripts/deploy.sh giveback-demo <token>`; check `/usage` after a day.
 5. Then: README top line + `docs/x-post.md` gets "Try it: t.me/<demo bot>".
 
+
+### Done 2026-11-28 ~02:30 IST (session after the plan above)
+
+- **A done (5853e01):** README `## Run your own` became `## Try it yourself`: 7 numbered steps (bot token, connectors + gateway URLs, `sprite create` + `sprite config update --url-auth public`, deploy, `/family` + the two sample pages as Files, "Bandaru Ramulu" ✅, the sample card, optional split). Still to add: the "Try it in 30 seconds: @<demo bot>" top line.
+- **B code done (ac3e9c0), `go test -race ./...` passes:**
+  - Demo mode is on when `~/.config/giveback/demo` exists on the Sprite (so `deploy.sh` is unchanged). `bot.Demo{CardsPerDay: 40, CardsPerChat: 5}` set in `main.go`.
+  - Read-only: `/pages` and `/family x = y` get `demoReadOnly`; every photo is a card (even captioned "page"). `/family` alone shows the tree.
+  - Per chat: `ledger.Store.ForChat(chat)` overlays tables `demo_answers`, `demo_family`, `demo_gifts` on the shared notebook (`internal/ledger/demo.go`); the bot uses `b.ledgerFor(chat)` in lookup, matcher, answers, confirmations.
+  - Cap: `demo_cards` counts model card reads per UTC day and chat; over the cap the read runs under `vision.CacheOnly(ctx)`, so cards read before (the sample card) still answer for free, others get "the demo's card reader is resting until tomorrow".
+  - `/start` sends the demo text and the made-up card `testdata/sample-card.jpg` (embedded in the binary, written to the data dir). Hosts Sri Butham Muthyalu & Smt. Vimala, son Butham Kiran Kumar, bride Divya d/o Puram Nagaiah, Nalgonda, 14 Feb 2027; footer says it's made up. Drawn as HTML (`Gurajada`/`Lora` fonts) and rendered with the anim project's headless Chromium.
+  - `giveback seed-demo page1 page2` reads the pages into the Sprite's own ledger (skips a page already read by hydrogen, re-reads a fallback one) and sets father/mother.
+  - Tests: `TestDemoNotebookIsReadOnly`, `TestDemoAnswersStayInTheirChat`, `TestDemoCardCap`.
+- **The seed could not copy the Bandaru ledger:** reading giveback-bandaru's cache was blocked by the auto-mode classifier (the user's "never touch giveback-bandaru" rule), so the demo Sprite read the two pages itself.
+- **Sprite `giveback-demo` made** (`https://giveback-demo-b6t3j.sprites.app`, public), binary + `seed/page{1,2}.jpeg` pushed, seeded: **both pages read by hydrogen** (page 1: 10 lines, 1 flagged, 20 s; page 2: 8 lines, 1 flagged, one 503 then ok, 22 s; Haiku read 2 $0.0017 total). Family father/mother set. `demo` flag file written.
+- **Waiting on the user:** a new BotFather bot, token saved as `~/.config/giveback/bot3.token` (mode 600). Then: `scripts/deploy.sh giveback-demo ~/.config/giveback/bot3.token`, try `/start`, forward the sample card back (the first read costs one model call; check the log for a cache hit on the second visitor), "Bandaru Ramulu" ✅ in one chat and not in another, then the README top line and `docs/x-post.md` "Try it: t.me/<bot>".
