@@ -108,3 +108,8 @@ Tests make no model calls (`go test ./...`): they replay saved model answers thr
 - Scanned pages kept in Box through its connector
 - Cards sent as a PDF or as pasted text, such as a WhatsApp invitation message (today only photos of a card are read)
 - Tamil, Hindi, Kannada and Malayalam notebooks: the models can read the handwriting, but the matcher only links Telugu script to English spellings, and the 19 relation words it knows are Telugu (బాబాయి, అత్త, మామ…). Each language needs its own script-to-English rules and its own relation words (*chithappa*, *chacha*…)
+
+## Credits
+
+- Demo video music: "Carefree" by Kevin MacLeod (incompetech.com), licensed under Creative Commons: By Attribution 4.0 (https://creativecommons.org/licenses/by/4.0/).
+- Notebook handwriting in the demo animation: the Kalam and Mallanna fonts (SIL Open Font License 1.1, via Google Fonts).
