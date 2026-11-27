@@ -1,22 +1,20 @@
 # X post (tag @flydotio)
 
-Final version from the 2026-11-26 session (one long post; the user is on X Premium). Attach the demo video to the post; keep the GitHub link at the end. "Show more" cuts in around "nobody finds the right page."
+One long post (the user is on X Premium), rewritten 2026-11-27 with South Park's but/therefore beats: each beat follows from the last with "but" (a problem) or "so" (the result). Attach the demo video to the post; keep the GitHub link at the end. "Show more" cuts in around "nobody finds the right page."
 
 > 5.2 million weddings in India this season, and my college friends are among them.
 >
-> At every wedding I've been to, someone sits with a notebook and writes down each gift, so years later the family knows what to give back.
+> At every one, someone writes each gift in a notebook. So years later, when that family invites you, you know what to give back.
 >
-> But notebooks fade. They get lost. And when a wedding card arrives, nobody finds the right page.
+> But notebooks fade, get lost, and when the card arrives, nobody finds the right page.
 >
-> So I built Giveback for @flydotio Hacksgiving.
+> So I built Giveback for @flydotio Hacksgiving. Photograph the notebook once, then forward the wedding card on Telegram.
 >
-> You photograph the notebook pages once. It reads the handwriting, Telugu and English. When a wedding card arrives, you forward it on Telegram. A sleeping Fly.io Sprite wakes up and replies with the actual handwritten line, what that family gave, and what it's worth in today's money.
+> But a computer that waits all year for one card would waste money. So each family's notebook lives on its own Fly.io Sprite. It sleeps for free, wakes when the card arrives, and replies with the actual handwritten line, what that family gave, and what it's worth today.
 >
-> But notebooks don't always have names. They say "బాబాయి" (father's younger brother).
+> But notebooks don't always have names. They say "బాబాయి" (father's younger brother). So Giveback asks: "Is this Bandaru Ramulu?" It never guesses, and it never decides what you give.
 >
-> So Giveback asks: "Is this Bandaru Ramulu?" It never guesses, and it never decides the amount for you. The family does.
->
-> The twist: when a son or daughter marries and starts their own home, the notebook splits too. They get their own Sprite with the whole family history, in 57 seconds. From then on, each house keeps its own.
+> But when a son or daughter marries and starts their own home, they need the notebook too. So Giveback copies it into a new Sprite, with everything the family taught it, in 57 seconds. From then on, each house keeps its own.
 >
 > Every family's notebook, as a computer that waits for the next invitation.
 >
