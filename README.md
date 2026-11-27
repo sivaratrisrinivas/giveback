@@ -87,15 +87,41 @@ Cost: Gemini runs on the free tier ($0). With Haiku as read 2, a page costs abou
 - `sprite file push` needs `-p` for a missing directory, otherwise it reports "directory does not exist".
 - Telegram delivers webhook updates for a bot one at a time, in order, and re-delivers after about 60 s. That's why the Gemini timeout is 25 s: a hung call still leaves room for the fallback before the re-delivery.
 
-## Run your own
+## Try it yourself
 
-You need Go, the [`sprite` CLI](https://sprites.dev) logged in to your Fly org, and a Telegram bot token from @BotFather.
+Everything below runs on your own Fly account and your own model keys. About 15 minutes.
 
-1. In the Fly dashboard → **Connectors**, add Google Gemini and Anthropic with your own keys, and grant them to Sprites named `giveback-*`. Put the two gateway URLs in `defaultGeminiBase` and `defaultAnthropicBase` in [`internal/vision/vision.go`](internal/vision/vision.go). For local runs you can instead set `GIVEBACK_GEMINI_BASE` / `GIVEBACK_ANTHROPIC_BASE`.
-2. `sprite create giveback-<family>` and make its URL public.
-3. Save the bot token in a file (mode 600), then `scripts/deploy.sh giveback-<family> path/to/bot.token`. This builds the binary, pushes it and the secrets, starts the service, and sets the webhook.
-4. In Telegram: `/start`, `/family father = …`, `/family mother = …` (her maiden name, surname first), `/pages`, send the page photos (as Files for sharpness), `/done`. Then forward a wedding card, or type a name.
-5. To split a household, make a second bot, then run `scripts/split.sh giveback-<family> <Family> <NewHome> path/to/bot2.token`.
+**You need:** Go 1.27+, the [`sprite` CLI](https://sprites.dev) logged in to your Fly org (`sprite login`), a Google AI Studio key (the free tier works) and an Anthropic API key.
+
+1. **Make a Telegram bot.** In Telegram, message @BotFather, send `/newbot`, pick a name. Save the token it gives you in a file only you can read:
+   ```sh
+   mkdir -p ~/.config/giveback && (umask 077; echo 'PASTE_TOKEN' > ~/.config/giveback/bot.token)
+   ```
+2. **Add the model connectors.** Fly dashboard → **Connectors** → add **Google Gemini** and **Anthropic** with your keys, and grant both to Sprites whose name starts with `giveback-`. Each connector shows a gateway URL: put them in `defaultGeminiBase` and `defaultAnthropicBase` in [`internal/vision/vision.go`](internal/vision/vision.go). No key ever lives on the Sprite.
+3. **Make the Sprite and open its URL** (Telegram must be able to reach it):
+   ```sh
+   sprite create --skip-console giveback-bandaru
+   sprite config update -s giveback-bandaru --url-auth public
+   ```
+4. **Deploy.** This builds the binary, pushes it and the secrets, starts the service on :8080 and sets the Telegram webhook:
+   ```sh
+   scripts/deploy.sh giveback-bandaru ~/.config/giveback/bot.token
+   ```
+5. **Fill the notebook with the sample pages.** In your bot's chat:
+   - `/start`
+   - `/family father = Bandaru Subba Rao`
+   - `/family mother = Butham Lakshmi` (her maiden name, surname first)
+   - `/pages`, then send [`testdata/notebook/page1.jpeg`](testdata/notebook/page1.jpeg) and [`page2.jpeg`](testdata/notebook/page2.jpeg) **as Files** (sharper than photos). Each takes about 25 s. Then `/done`.
+6. **Ask it things.**
+   - Type `Bandaru Ramulu`. The notebook never writes that name, only బాబాయి (father's younger brother), so it asks *"Is this Bandaru Ramulu?"* with the handwritten line. Tap ✅ and ask again: it remembers.
+   - Send the made-up invitation [`testdata/sample-card.png`](testdata/sample-card.png). It reads the hosts, finds Butham Muthyalu in two lines written in different scripts and word orders, and shows what he gave and what that's worth today. It asks before matching the other Muthyalu (from Chityal) and విమల అత్త.
+7. **Optional: split the household.** Make a second bot with @BotFather, save its token as `~/.config/giveback/bot2.token`, then:
+   ```sh
+   scripts/split.sh giveback-bandaru Bandaru Ravi ~/.config/giveback/bot2.token
+   ```
+   About a minute later the second bot has the whole notebook, including your ✅ answers. `/start` there tells the story.
+
+Logs: `sprite exec -s giveback-bandaru -- tail -f /.sprite/logs/services/giveback.log`. Running costs: `/usage` in the bot.
 
 Tests make no model calls (`go test ./...`): they replay saved model answers through the real crop, flag and match code.
 
