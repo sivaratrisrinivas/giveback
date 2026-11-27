@@ -19,6 +19,7 @@ One long post (the user is on X Premium), rewritten 2026-11-27 with South Park's
 > Every family's notebook, as a computer that waits for the next invitation.
 >
 > 🎥 Demo below
+> Try it: t.me/giveback_demo_bot
 > Code: github.com/sivaratrisrinivas/giveback
 
 Reply under the post (required by the music licence):

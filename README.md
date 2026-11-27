@@ -9,6 +9,8 @@
 
 Entry for [Fly.io Hacksgiving 2026](https://fly.io/hacksgiving/).
 
+**Try it in 30 seconds:** open [@giveback_demo_bot](https://t.me/giveback_demo_bot) in Telegram, send `/start`, and forward the made-up wedding card it sends you back to it. The demo notebook is shared and read-only; your answers stay in your chat.
+
 At Telugu, Tamil and Kerala weddings, families write every gift in a notebook: who gave it, how much money or gold, at which function. Years later, when that family invites you, you open the notebook so you can give back at least as much. The habit is called *chadivimpulu* in Telugu and *moi* in Tamil, and in the north it's the "red notebook". The notebooks fade, tear and get lost.
 
 Giveback is a Telegram bot that lives on the family's own Fly.io Sprite:
