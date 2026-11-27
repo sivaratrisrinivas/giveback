@@ -111,6 +111,9 @@ func (m *inkMask) quietestRow(y0, y1, x0, x1 int) int {
 	return best
 }
 
+// px is a line's box in pixels, with its centre row.
+type px struct{ top, left, bottom, right, cy int }
+
 // cropLines cuts every line out of an upright page. boxes are in upright
 // coordinates (0–1000). A nil entry means that line could not be cut out.
 func cropLines(page image.Image, boxes [][4]int) ([]image.Image, []error) {
@@ -118,7 +121,6 @@ func cropLines(page image.Image, boxes [][4]int) ([]image.Image, []error) {
 	W, H := b.Dx(), b.Dy()
 	m := newInkMask(page)
 
-	type px struct{ top, left, bottom, right, cy int }
 	out := make([]image.Image, len(boxes))
 	errs := make([]error, len(boxes))
 	var order []int
@@ -134,6 +136,7 @@ func cropLines(page image.Image, boxes [][4]int) ([]image.Image, []error) {
 		order = append(order, i)
 	}
 	sort.SliceStable(order, func(a, c int) bool { return pb[order[a]].cy < pb[order[c]].cy })
+	alignToWriting(m, pb, order)
 
 	for k, i := range order {
 		p := pb[i]
@@ -186,6 +189,120 @@ func cropLines(page image.Image, boxes [][4]int) ([]image.Image, []error) {
 		out[i] = c
 	}
 	return out, errs
+}
+
+// alignToWriting moves each box's centre onto the row of writing it stands
+// for. Model boxes drift: on one page every box from line 8 down sat about a
+// line too high, so line 9's picture showed line 10. The rows of writing are
+// found from the ink and matched to the boxes top to bottom, one each, but
+// only when there are exactly as many rows as boxes and no box moves by more
+// than about a line and a half. Otherwise the boxes are left as they were.
+func alignToWriting(m *inkMask, pb []px, order []int) {
+	if len(order) < 2 {
+		return
+	}
+	x0, x1 := m.w, 0
+	for _, i := range order {
+		x0, x1 = min(x0, pb[i].left), max(x1, pb[i].right)
+	}
+	rows := m.writingRows(x0, x1)
+	n := len(order)
+	// Typical distance between neighbouring boxes: how far one may move.
+	var steps []int
+	for k := 1; k < n; k++ {
+		steps = append(steps, pb[order[k]].cy-pb[order[k-1]].cy)
+	}
+	sort.Ints(steps)
+	step := steps[len(steps)/2]
+	if step <= 0 {
+		return
+	}
+	// The rows of writing where the boxes are, allowing for drift: from half
+	// a line above the first box to a line and a half below the last. A
+	// heading above is left out; a stray mark that made a row of its own
+	// gives one row too many, and then nothing is moved.
+	lo, hi := pb[order[0]].cy-step/2, pb[order[n-1]].cy+step*3/2
+	var near []span
+	for _, r := range rows {
+		if r.cy() >= lo && r.cy() <= hi {
+			near = append(near, r)
+		}
+	}
+	if len(near) != n {
+		return
+	}
+	for k, i := range order {
+		if abs(near[k].cy()-pb[i].cy) > step*3/2 {
+			return
+		}
+	}
+	for k, i := range order {
+		pb[i].cy = near[k].cy()
+	}
+}
+
+type span struct{ top, bottom int }
+
+func (s span) cy() int { return (s.top + s.bottom) / 2 }
+
+// writingRows finds the rows of handwriting between columns x0 and x1: runs
+// of pixel rows with ink, split where a row is nearly blank. Specks and the
+// marks Telugu writes above or below a letter, which form thin runs of their
+// own, are joined to the nearest row.
+func (m *inkMask) writingRows(x0, x1 int) []span {
+	ink := make([]int, m.h)
+	var sorted []int
+	for y := range ink {
+		ink[y] = m.rowInk(y, x0, x1)
+		if ink[y] > 0 {
+			sorted = append(sorted, ink[y])
+		}
+	}
+	if len(sorted) == 0 {
+		return nil
+	}
+	sort.Ints(sorted)
+	busy := sorted[len(sorted)*9/10]
+	quiet := max(busy*3/100, 1)
+	var rows []span
+	for y := 0; y < m.h; {
+		if ink[y] <= quiet {
+			y++
+			continue
+		}
+		top := y
+		for y < m.h && ink[y] > quiet {
+			y++
+		}
+		rows = append(rows, span{top, y})
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	var hs []int
+	for _, r := range rows {
+		hs = append(hs, r.bottom-r.top)
+	}
+	sort.Ints(hs)
+	tall := hs[len(hs)*3/4] // most runs are whole lines of writing
+	for changed := true; changed && len(rows) > 1; {
+		changed = false
+		for i, r := range rows {
+			if r.bottom-r.top >= tall*2/5 {
+				continue
+			}
+			j := i - 1 // join it to the closer neighbour
+			if i == 0 || (i+1 < len(rows) && rows[i+1].top-r.bottom < r.top-rows[i-1].bottom) {
+				j = i + 1
+			}
+			a, b := min(i, j), max(i, j)
+			rows[a] = span{min(rows[a].top, rows[b].top), max(rows[a].bottom, rows[b].bottom)}
+			rows = append(rows[:b], rows[b+1:]...)
+			changed = true
+			break
+		}
+	}
+	return rows
 }
 
 func abs(x int) int {

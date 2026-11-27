@@ -125,3 +125,47 @@ func TestUprightBox(t *testing.T) {
 		t.Errorf("got %v want %v", got, want)
 	}
 }
+
+// Boxes that drift up the page, until the last sits nearer the line above
+// it, still give each line its own picture (seen live on the demo's page 1).
+func TestCropFollowsDriftingBoxes(t *testing.T) {
+	const W, H = 1000, 600
+	page := image.NewRGBA(image.Rect(0, 0, W, H))
+	for y := 0; y < H; y++ {
+		for x := 0; x < W; x++ {
+			page.Set(x, y, color.White)
+		}
+	}
+	ink := color.RGBA{30, 30, 120, 255}
+	widths := []int{300, 700, 450, 600} // tells the lines apart in a crop
+	var boxes [][4]int
+	for k, w := range widths {
+		top := 100 + 100*k
+		for y := top; y < top+20; y++ {
+			for x := 100; x < 100+w; x++ {
+				page.Set(x, y, ink)
+			}
+		}
+		drift := 30 * k // line 4's box is 90 px up: closer to line 3 than to line 4
+		boxes = append(boxes, [4]int{(top - drift) * 1000 / H, 100, (top + 20 - drift) * 1000 / H, (100 + w) * 1000 / W})
+	}
+	crops, errs := cropLines(page, boxes)
+	for k, w := range widths {
+		if errs[k] != nil {
+			t.Fatalf("line %d: %v", k+1, errs[k])
+		}
+		b := crops[k].Bounds()
+		inkW := 0
+		for x := b.Min.X; x < b.Max.X; x++ {
+			for y := b.Min.Y; y < b.Max.Y; y++ {
+				if r, _, _, _ := crops[k].At(x, y).RGBA(); r < 0x8000 {
+					inkW++
+					break
+				}
+			}
+		}
+		if inkW != w {
+			t.Errorf("line %d: crop holds ink %d px wide; want %d (its own line only)", k+1, inkW, w)
+		}
+	}
+}
