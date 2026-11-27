@@ -228,3 +228,21 @@ How it works:
    `build.py` (backup `build.before-anim.py`): shots 1–2 take clip A, cut where vo01 ends; shot 9 is clip B (0–5.0 s, covering "But when a son marries…", which ends at 4.8 s) then the split.sh terminal from 8.0 s (after the untimed build) to 85.3 s, sped up to fit the rest (~13x, tagged).
    Was: Then step 7 (1 h buffer, no new features) and step 8 (submission: check the hackathon-playbook MCP `submitting` and `pitching` checklists first).
    When `TodayMonth` gets old, take the newest month from https://labourbureau.gov.in/CPI.
+
+## Next session: "Try it" README + public demo bot (user asked 2026-11-27 for both)
+
+Why: people from the X post (`docs/x-post.md`) and judges can't try Giveback without a Fly account, two API keys, Go and BotFather.
+
+**A. README "Try it yourself" (do first, ~15 min, no code).** Rewrite `## Run your own` as numbered steps: prerequisites; BotFather token; Fly Connectors (Gemini + Anthropic, granted to `giveback-*`) and the two gateway URLs in `internal/vision/vision.go`; `sprite create` + public URL; `scripts/deploy.sh`; then in Telegram `/start`, `/family father = Bandaru Subba Rao`, `/family mother = Butham Lakshmi`, `/pages` + `testdata/notebook/page1.jpeg` and `page2.jpeg` as Files + `/done`, type "Bandaru Ramulu", tap ✅, forward the sample card. Add a top line "Try it in 30 seconds: @<demo bot>" once B is live. Optional split step.
+
+**B. Public demo bot (~2–3 h). New Sprite `giveback-demo` + new BotFather bot; never touch giveback-bandaru / giveback-ravi.**
+1. Demo mode behind an env/flag read in `main.go` (e.g. `GIVEBACK_DEMO=1`), handled in `internal/bot/bot.go` `handle()` (line ~118):
+   - read-only notebook: `/pages`, `/family` changes and `copy-for` refused with a friendly line ("This is a demo notebook…");
+   - answers per chat: Yes/No taps, relation links and confirmed amounts are keyed by chat in demo mode so one visitor never changes what the next sees (ledger tables `answers`, `family` link rows, `lines.checked`; or a per-chat overlay table);
+   - daily cap on card reads (e.g. 40/day total, 5/chat), then "the demo's card reader is resting until tomorrow; type a name instead"; typing names costs no model call;
+   - `/start` text for strangers: what this is, the made-up Bandaru notebook, three things to try.
+2. Seed: copy the hydrogen-read Bandaru ledger with `giveback copy-for` (pages, lines, crops, family tree, model cache) **after clearing its answers** so visitors get the questions.
+3. Made-up sample card: an invented wedding invitation (fictional hosts, e.g. "Sri Butham Muthyalu & Smt. Vimala" — they are the synthetic notebook's people, not the real card) as an image in `testdata/`, forwardable by visitors. Never use the real jayaprakash card.
+4. Tests (no model calls): demo refuses `/pages`; two chats' answers don't mix; the cap. Deploy with `scripts/deploy.sh giveback-demo <token>`; check `/usage` after a day.
+5. Then: README top line + `docs/x-post.md` gets "Try it: t.me/<demo bot>".
+
