@@ -22,6 +22,9 @@ import (
 type Store struct {
 	db  *sql.DB
 	dir string
+
+	chat    int64 // with perChat: the demo visitor this view belongs to (see ForChat)
+	perChat bool
 }
 
 const schema = `
@@ -106,7 +109,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1) // one writer; the bot handles one message at a time anyway
-	if _, err := db.Exec(schema + householdSchema); err != nil {
+	if _, err := db.Exec(schema + householdSchema + demoSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("create schema: %w", err)
 	}
@@ -140,6 +143,7 @@ func migrate(db *sql.DB) error {
 	return nil
 }
 
+// Close closes the ledger (and every ForChat view of it).
 func (s *Store) Close() error { return s.db.Close() }
 
 // Dir is where the ledger lives; crop paths are relative to it.
@@ -292,7 +296,15 @@ func (s *Store) Entries() ([]Entry, error) {
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if s.perChat {
+		if err := s.chatGifts(out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Mode returns what a chat is doing: "pages" while adding notebook pages, else "".
@@ -410,11 +422,22 @@ func (s *Store) Family() (map[string]string, error) {
 		}
 		out[r] = n
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if s.perChat {
+		if err := s.chatFamily(out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // SetFamily records who a relation is; an empty name forgets it.
 func (s *Store) SetFamily(relation, name string) error {
+	if s.perChat {
+		return s.setChatFamily(relation, name)
+	}
 	if strings.TrimSpace(name) == "" {
 		_, err := s.db.Exec(`DELETE FROM family WHERE relation = ?`, relation)
 		return err
@@ -452,6 +475,9 @@ func (s *Store) GetAsk(id int64) (Ask, bool, error) {
 
 // SetAnswer remembers whether a line is this person; a later answer replaces it.
 func (s *Store) SetAnswer(personKey string, lineID int64, yes bool) error {
+	if s.perChat {
+		return s.setChatAnswer(personKey, lineID, yes)
+	}
 	_, err := s.db.Exec(`INSERT INTO answers (person_key, line_id, yes, answered_at) VALUES (?, ?, ?, ?)
 		ON CONFLICT(person_key, line_id) DO UPDATE SET yes = excluded.yes, answered_at = excluded.answered_at`,
 		personKey, lineID, yes, time.Now().UTC().Format(time.RFC3339))
@@ -478,7 +504,15 @@ func (s *Store) Answers() (map[string]map[int64]bool, error) {
 		}
 		out[k][id] = yes
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if s.perChat {
+		if err := s.chatAnswers(out); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // Entry returns one line by ID.
@@ -498,6 +532,9 @@ func (s *Store) Entry(id int64) (Entry, bool, error) {
 // ConfirmGift records the gift as the family read it from the handwriting:
 // it replaces the model's reading and clears the line's flags.
 func (s *Store) ConfirmGift(lineID int64, digits string, gold float64) error {
+	if s.perChat {
+		return s.confirmChatGift(lineID, digits, gold)
+	}
 	res, err := s.db.Exec(`UPDATE lines SET amount_digits = ?, gold = ?, flags = '[]', checked = 1 WHERE id = ?`,
 		digits, gold, lineID)
 	if err != nil {

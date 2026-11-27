@@ -138,7 +138,8 @@ func (s *Store) CopyFor(dir, from, newName string) (Copy, error) {
 		return Copy{}, err
 	}
 	defer tx.Rollback()
-	for _, q := range []string{`DELETE FROM updates`, `DELETE FROM chats`, `DELETE FROM asks`, `DELETE FROM calls`, `DELETE FROM copies`, `DELETE FROM household`} {
+	for _, q := range []string{`DELETE FROM updates`, `DELETE FROM chats`, `DELETE FROM asks`, `DELETE FROM calls`, `DELETE FROM copies`, `DELETE FROM household`,
+		`DELETE FROM demo_answers`, `DELETE FROM demo_family`, `DELETE FROM demo_gifts`, `DELETE FROM demo_cards`} {
 		if _, err := tx.Exec(q); err != nil {
 			return Copy{}, err
 		}

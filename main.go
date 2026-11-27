@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -28,12 +29,21 @@ import (
 	"github.com/sivaratrisrinivas/giveback/internal/wake"
 )
 
+// sampleCard is the made-up invitation the demo bot sends with /start.
+//
+//go:embed testdata/sample-card.jpg
+var sampleCard []byte
+
 func main() {
 	home, _ := os.UserHomeDir()
 	cfgDir := envOr("GIVEBACK_CONFIG", filepath.Join(home, ".config", "giveback"))
 	dataDir := envOr("GIVEBACK_DATA", filepath.Join(home, "giveback", "data"))
 	if len(os.Args) > 1 && os.Args[1] == "copy-for" {
 		copyFor(dataDir, os.Args[2:])
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "seed-demo" {
+		seedDemo(dataDir, os.Args[2:])
 		return
 	}
 	token := mustRead(filepath.Join(cfgDir, "bot.token"))
@@ -43,9 +53,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open ledger: %v", err)
 	}
-	reader := vision.New()
-	cache := filepath.Join(dataDir, "cache") // the same photo never reaches a model twice
-	firstModel := vision.Cached(reader, cache, "hydrogen-first")
+	firstModel := vision.Cached(vision.New(), filepath.Join(dataDir, "cache"), "hydrogen-first")
 
 	// Notice each time the Sprite slept: the process is frozen, not stopped.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -57,11 +65,17 @@ func main() {
 		Wakes: wakes,
 		Store: store,
 		TG:    telegram.New(token),
-		Pages: notebook.Models{
-			Page:    firstModel,
-			Amounts: vision.Cached(reader.Haiku(), cache, "haiku"), // approved exception: saves Gemini's free quota
-		},
+		Pages: pageModels(dataDir),
 		Cards: firstModel,
+	}
+	// The public demo bot: a file named "demo" beside the bot token turns it on.
+	if _, err := os.Stat(filepath.Join(cfgDir, "demo")); err == nil {
+		card := filepath.Join(dataDir, "sample-card.jpg")
+		if err := os.WriteFile(card, sampleCard, 0o644); err != nil {
+			log.Fatalf("write sample card: %v", err)
+		}
+		b.Demo = &bot.Demo{CardsPerDay: 40, CardsPerChat: 5, SampleCard: card}
+		log.Printf("demo mode: read-only notebook, answers kept per chat, %d card reads a day (%d per chat)", b.Demo.CardsPerDay, b.Demo.CardsPerChat)
 	}
 
 	mux := http.NewServeMux()
@@ -151,6 +165,76 @@ func copyFor(dataDir string, args []string) {
 	}
 	fmt.Printf("copied %d page(s), %d line(s) for the %s household into %s in %s\n",
 		c.Pages, c.Lines, c.Name, args[0], time.Since(start).Round(time.Millisecond))
+}
+
+// pageModels reads notebook pages. Every answer is kept in the data dir's
+// cache: the same photo never reaches a model twice.
+func pageModels(dataDir string) notebook.Models {
+	reader, cache := vision.New(), filepath.Join(dataDir, "cache")
+	return notebook.Models{
+		Page:    vision.Cached(reader, cache, "hydrogen-first"),
+		Amounts: vision.Cached(reader.Haiku(), cache, "haiku"), // approved exception: saves Gemini's free quota
+	}
+}
+
+// seedDemo fills the demo bot's notebook: the sample pages and the made-up
+// family's father and mother. Run it on the demo Sprite. A page already read
+// by the primary model is skipped; one read by the fallback is read again.
+func seedDemo(dataDir string, photos []string) {
+	if len(photos) == 0 {
+		log.Fatal("usage: giveback seed-demo page1.jpeg page2.jpeg …")
+	}
+	store, err := ledger.Open(dataDir)
+	if err != nil {
+		log.Fatalf("open ledger: %v", err)
+	}
+	defer store.Close()
+	models := pageModels(dataDir)
+	ctx := context.Background()
+	for _, path := range photos {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatal(err)
+		}
+		hash := vision.Hash(data)
+		old, have, err := store.PageByHash(hash)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if have && old.Model != vision.FallbackModel {
+			fmt.Printf("%s: already read by %s (page %d, %d lines)\n", path, old.Model, old.ID, old.Lines)
+			continue
+		}
+		img, err := bot.ForModel(data)
+		if err != nil {
+			log.Fatalf("%s: %v", path, err)
+		}
+		start := time.Now()
+		p, err := notebook.Read(ctx, models, img)
+		if err != nil {
+			log.Fatalf("%s: %v", path, err)
+		}
+		if have {
+			if err := store.DeletePage(old.ID); err != nil {
+				log.Fatal(err)
+			}
+		}
+		info, err := store.AddPage(hash, p)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%s: page %d, %s %s, %d lines, %d flagged; read 1 %s, read 2 %s, %s\n", path, info.ID, p.Function, p.Date,
+			info.Lines, info.Flagged, p.FirstRead.Model, p.SecondRead.Model, time.Since(start).Round(time.Second))
+		if p.FirstRead.Model == vision.FallbackModel {
+			fmt.Printf("  read 1 fell back to %s (%v); run seed-demo again later for a %s reading\n", vision.FallbackModel, p.FirstRead.PrimaryErr, vision.PrimaryModel)
+		}
+	}
+	for r, n := range map[string]string{"father": "Bandaru Subba Rao", "mother": "Butham Lakshmi"} {
+		if err := store.SetFamily(r, n); err != nil {
+			log.Fatal(err)
+		}
+	}
+	fmt.Println("family: father = Bandaru Subba Rao, mother = Butham Lakshmi")
 }
 
 func mustRead(path string) string {

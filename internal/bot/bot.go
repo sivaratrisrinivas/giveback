@@ -6,6 +6,7 @@ package bot
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -20,7 +21,6 @@ import (
 
 	"golang.org/x/image/draw"
 
-	"github.com/sivaratrisrinivas/giveback/internal/card"
 	"github.com/sivaratrisrinivas/giveback/internal/ledger"
 	"github.com/sivaratrisrinivas/giveback/internal/match"
 	"github.com/sivaratrisrinivas/giveback/internal/notebook"
@@ -47,6 +47,7 @@ type Bot struct {
 	Pages notebook.Models // read 1 and read 2 of a notebook page
 	Cards vision.Asker    // reads invitation cards
 	Wakes *wake.Watcher   // when the Sprite last slept, for /usage; may be nil
+	Demo  *Demo           // non-nil for the public demo bot (demo.go)
 
 	mu sync.Mutex // one message at a time: simple, and SQLite has one writer
 }
@@ -127,6 +128,14 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 	text := strings.TrimSpace(m.Text)
 	cmd := strings.ToLower(strings.SplitN(text, "@", 2)[0])
 
+	if b.Demo != nil {
+		switch {
+		case cmd == "/start":
+			return b.demoStart(ctx, chat, true)
+		case cmd == "/pages", strings.HasPrefix(cmd, "/family") && strings.TrimSpace(text[len("/family"):]) != "":
+			return b.say(ctx, chat, demoReadOnly)
+		}
+	}
 	switch {
 	case cmd == "/start" || cmd == "/help":
 		return b.help(ctx, chat)
@@ -169,6 +178,9 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 			return b.say(ctx, chat, "Sorry, I couldn't fetch that photo from Telegram. Please send it again.")
 		}
 		isPage := mode == modePages || strings.Contains(strings.ToLower(m.Caption), "page")
+		if isPage && b.Demo != nil { // the demo notebook is read-only: every photo is a card
+			isPage = false
+		}
 		if isPage {
 			if mode == modePages {
 				if err := b.Store.SetMode(chat, modePages); err != nil { // still adding pages: restart the clock
@@ -196,6 +208,9 @@ func (b *Bot) handle(ctx context.Context, u telegram.Update) error {
 // help explains the bot, starting with whose notebook this is when it has
 // been split between households.
 func (b *Bot) help(ctx context.Context, chat int64) error {
+	if b.Demo != nil {
+		return b.demoStart(ctx, chat, false)
+	}
 	h, err := b.Store.Household()
 	if err != nil {
 		return err
@@ -308,8 +323,12 @@ func (b *Bot) answerCard(ctx context.Context, chat int64, data []byte) error {
 	}
 	b.say(ctx, chat, "Reading the card…")
 	stop := b.typing(ctx, chat)
-	inv, res, err := card.Read(ctx, b.Cards, img)
+	inv, res, err := b.readCard(ctx, chat, img)
 	stop()
+	if errors.Is(err, vision.ErrNotCached) {
+		log.Printf("chat %d: demo card reads used up for today", chat)
+		return b.say(ctx, chat, "The demo's card reader is resting until tomorrow (it has a daily limit). You can still type a name to look it up, like Butham Muthyalu or Bandaru Ramulu, or forward the sample card from /start.")
+	}
 	if err != nil {
 		log.Printf("chat %d: read card: %v", chat, err)
 		return b.say(ctx, chat, "Sorry, I couldn't read that card just now. Please try again in a little while.")
@@ -339,12 +358,13 @@ func (b *Bot) answerCard(ctx context.Context, chat int64, data []byte) error {
 }
 
 // matcher loads what the family has told us.
-func (b *Bot) matcher() (match.Matcher, error) {
-	fam, err := b.Store.Family()
+func (b *Bot) matcher(chat int64) (match.Matcher, error) {
+	st := b.ledgerFor(chat)
+	fam, err := st.Family()
 	if err != nil {
 		return match.Matcher{}, err
 	}
-	ans, err := b.Store.Answers()
+	ans, err := st.Answers()
 	if err != nil {
 		return match.Matcher{}, err
 	}
@@ -360,14 +380,14 @@ func (b *Bot) matcher() (match.Matcher, error) {
 // lookup finds and shows the notebook lines for these people. names are how
 // to call them in the reply (nil for a typed search).
 func (b *Bot) lookup(ctx context.Context, chat int64, persons []match.Person, names []string) error {
-	entries, err := b.Store.Entries()
+	entries, err := b.ledgerFor(chat).Entries()
 	if err != nil {
 		return err
 	}
 	if len(entries) == 0 {
 		return b.say(ctx, chat, "The notebook is empty so far. Send /pages to add its pages first.")
 	}
-	m, err := b.matcher()
+	m, err := b.matcher(chat)
 	if err != nil {
 		return err
 	}
@@ -469,10 +489,11 @@ func (b *Bot) answer(ctx context.Context, q *telegram.CallbackQuery) error {
 		return nil
 	}
 	yes := kind == "y"
-	if err := b.Store.SetAnswer(match.PersonKey(a.Person), a.LineID, yes); err != nil {
+	st := b.ledgerFor(chat)
+	if err := st.SetAnswer(match.PersonKey(a.Person), a.LineID, yes); err != nil {
 		return err
 	}
-	e, _, err := b.Store.Entry(a.LineID)
+	e, _, err := st.Entry(a.LineID)
 	if err != nil {
 		return err
 	}
@@ -481,12 +502,12 @@ func (b *Bot) answer(ctx context.Context, q *telegram.CallbackQuery) error {
 	if yes {
 		reply = fmt.Sprintf("Noted: %s is %s. I'll remember.", where, a.Person)
 		if a.Relation != "" {
-			fam, err := b.Store.Family()
+			fam, err := st.Family()
 			if err != nil {
 				return err
 			}
 			if old, ok := fam[a.Relation]; !ok || old == "" {
-				if err := b.Store.SetFamily(a.Relation, a.Person); err != nil {
+				if err := st.SetFamily(a.Relation, a.Person); err != nil {
 					return err
 				}
 				reply += fmt.Sprintf(" From now on %s in the notebook means %s (change it with /family %s = <name>).", a.Relation, a.Person, a.Relation)
@@ -506,7 +527,7 @@ func (b *Bot) answer(ctx context.Context, q *telegram.CallbackQuery) error {
 // family shows or changes the family tree: "/family father = Bandaru Subba Rao".
 func (b *Bot) family(ctx context.Context, chat int64, arg string) error {
 	if arg == "" {
-		fam, err := b.Store.Family()
+		fam, err := b.ledgerFor(chat).Family()
 		if err != nil {
 			return err
 		}
@@ -856,7 +877,7 @@ func (b *Bot) confirmTap(ctx context.Context, q *telegram.CallbackQuery, chat, m
 	if err != nil || len(parts) < 2 {
 		return b.TG.AnswerCallback(ctx, q.ID, "")
 	}
-	e, ok, err := b.Store.Entry(lineID)
+	e, ok, err := b.ledgerFor(chat).Entry(lineID)
 	if err != nil {
 		return err
 	}
@@ -901,7 +922,7 @@ func (b *Bot) typedGift(ctx context.Context, chat int64, mode, text string) erro
 		}
 		return b.say(ctx, chat, "OK, left as it was.")
 	}
-	e, ok, err := b.Store.Entry(lineID)
+	e, ok, err := b.ledgerFor(chat).Entry(lineID)
 	if err != nil {
 		return err
 	}
@@ -951,7 +972,7 @@ func allDigits(s string) bool {
 
 // confirm stores the family's reading of a gift and answers with today's value.
 func (b *Bot) confirm(ctx context.Context, chat int64, e ledger.Entry, digits string, gold float64) error {
-	if err := b.Store.ConfirmGift(e.ID, digits, gold); err != nil {
+	if err := b.ledgerFor(chat).ConfirmGift(e.ID, digits, gold); err != nil {
 		return err
 	}
 	log.Printf("chat %d: gift on line %d confirmed as %q + %g sovereigns", chat, e.ID, digits, gold)

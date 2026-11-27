@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"time"
@@ -37,6 +38,9 @@ func (c cached) ReadJSON(ctx context.Context, prompt string, schema map[string]a
 			return Result{JSON: a.JSON, Model: a.Model, Elapsed: a.Elapsed, Cached: true}, nil
 		}
 	}
+	if ctx.Value(cacheOnlyKey{}) != nil {
+		return Result{}, ErrNotCached
+	}
 	res, err := c.next.ReadJSON(ctx, prompt, schema, imgs...)
 	if err != nil {
 		return res, err
@@ -52,6 +56,18 @@ func (c cached) ReadJSON(ctx context.Context, prompt string, schema map[string]a
 		}
 	}
 	return res, nil
+}
+
+// ErrNotCached is what a Cached reader returns under CacheOnly for a question
+// it has no saved answer to.
+var ErrNotCached = errors.New("no saved answer, and models are off for this request")
+
+type cacheOnlyKey struct{}
+
+// CacheOnly makes Cached readers answer from disk only: nothing reaches a
+// model. The demo bot uses it once its daily card reads are spent.
+func CacheOnly(ctx context.Context) context.Context {
+	return context.WithValue(ctx, cacheOnlyKey{}, true)
 }
 
 func (c cached) key(prompt string, schema map[string]any, imgs []Image) string {

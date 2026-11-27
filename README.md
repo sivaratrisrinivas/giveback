@@ -114,7 +114,7 @@ Everything below runs on your own Fly account and your own model keys. About 15 
    - `/pages`, then send [`testdata/notebook/page1.jpeg`](testdata/notebook/page1.jpeg) and [`page2.jpeg`](testdata/notebook/page2.jpeg) **as Files** (sharper than photos). Each takes about 25 s. Then `/done`.
 6. **Ask it things.**
    - Type `Bandaru Ramulu`. The notebook never writes that name, only బాబాయి (father's younger brother), so it asks *"Is this Bandaru Ramulu?"* with the handwritten line. Tap ✅ and ask again: it remembers.
-   - Send the made-up invitation [`testdata/sample-card.png`](testdata/sample-card.png). It reads the hosts, finds Butham Muthyalu in two lines written in different scripts and word orders, and shows what he gave and what that's worth today. It asks before matching the other Muthyalu (from Chityal) and విమల అత్త.
+   - Send the made-up invitation [`testdata/sample-card.jpg`](testdata/sample-card.jpg). It reads the hosts, finds Butham Muthyalu in two lines written in different scripts and word orders, and shows what he gave and what that's worth today. It asks before matching the other Muthyalu (from Chityal) and విమల అత్త.
 7. **Optional: split the household.** Make a second bot with @BotFather, save its token as `~/.config/giveback/bot2.token`, then:
    ```sh
    scripts/split.sh giveback-bandaru Bandaru Ravi ~/.config/giveback/bot2.token
